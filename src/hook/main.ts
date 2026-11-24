@@ -1,6 +1,4 @@
-import { decide, type GuardEnv } from './guard.js';
-
-function emitDeny(reason: string): void {
+function emitDeny(reason: string, failure: boolean): void {
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
@@ -10,6 +8,11 @@ function emitDeny(reason: string): void {
       },
     }) + '\n',
   );
+  if (failure) {
+    // exit code 2 is the blocking-error code in Claude Code; exit 1 would fail open
+    process.stderr.write(reason + '\n');
+    process.exitCode = 2;
+  }
 }
 
 async function readStdin(): Promise<string> {
@@ -19,6 +22,8 @@ async function readStdin(): Promise<string> {
 }
 
 async function run(): Promise<void> {
+  // dynamic import so a load failure of the guard is caught below and fails closed
+  const { decide } = await import('./guard.js');
   const input: unknown = JSON.parse(await readStdin());
   if (typeof input !== 'object' || input === null || Array.isArray(input)) throw new Error('bad input');
   const rec = input as Record<string, unknown>;
@@ -29,15 +34,14 @@ async function run(): Promise<void> {
   }
   const cwd = typeof rec['cwd'] === 'string' ? rec['cwd'] : '';
   const e = process.env;
-  const env: GuardEnv = {
+  const d = decide(toolName, toolInput as Record<string, unknown>, {
     appData: e['APPDATA'] ?? '',
     localAppData: e['LOCALAPPDATA'] ?? '',
     userProfile: e['USERPROFILE'] ?? '',
     pluginRoot: e['CLAUDE_PLUGIN_ROOT'] ?? '',
     projectDir: e['CLAUDE_PROJECT_DIR'] || cwd,
-  };
-  const d = decide(toolName, toolInput as Record<string, unknown>, env);
-  if (!d.allow) emitDeny(d.reason);
+  });
+  if (!d.allow) emitDeny(d.reason, false);
 }
 
-run().catch(() => emitDeny('Blocked: guard hook could not evaluate this tool call (fail closed).'));
+run().catch(() => emitDeny('Blocked: guard hook could not evaluate this tool call (fail closed).', true));

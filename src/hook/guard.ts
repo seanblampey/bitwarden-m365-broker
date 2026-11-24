@@ -13,7 +13,7 @@ const READ_ONLY_TOOLS = new Set(['Read', 'Grep', 'Glob']);
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 const PATH_KEYS = ['file_path', 'path', 'notebook_path'];
 
-const BW_WORD = /(^|[\s;&|(`'"])bw(\.exe|\.cmd|\.ps1)?(?=$|[\s;&|)`'"])/i;
+const BW_WORD = /(^|[\s;&|(`'"/\\])bw(\.exe|\.cmd|\.ps1)?(?=$|[\s;&|)`'"])/i;
 const UI_AUTOMATION =
   /SendKeys|UIAutomation|System\.Windows\.Automation|AutoHotkey|\bahk\b|wscript|cscript|nircmd|mouse_event|SetCursorPos/i;
 
@@ -58,13 +58,16 @@ function normalizeCommand(cmd: string, env: GuardEnv): string[] {
   const base = cmd.toLowerCase();
   const sub = (s: string, re: RegExp, val: string) => (val ? s.replace(re, () => val.toLowerCase()) : s);
   let expanded = base;
-  expanded = sub(expanded, /%userprofile%|\$env:userprofile|\$\{env:userprofile\}|\$\{?home\}?(?![a-z0-9_])/g, env.userProfile);
-  expanded = sub(expanded, /%appdata%|\$env:appdata|\$\{env:appdata\}/g, env.appData);
-  expanded = sub(expanded, /%localappdata%|\$env:localappdata|\$\{env:localappdata\}/g, env.localAppData);
+  expanded = sub(expanded, /%userprofile%|\$\{?(env:)?userprofile\}?/g, env.userProfile);
+  expanded = sub(expanded, /%localappdata%|\$\{?(env:)?localappdata\}?/g, env.localAppData);
+  expanded = sub(expanded, /%appdata%|\$\{?(env:)?appdata\}?/g, env.appData);
   expanded = expanded.replace(/(^|[\s'"=:(])~(?=[\\/]|$|\s|['")])/g, (_m, pre: string) => pre + env.userProfile.toLowerCase());
   for (const s of new Set([base, expanded])) {
     const slashed = s.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
-    variants.push(slashed, slashed.replace(/\/\.(?=\/)/g, ''));
+    const dotless = slashed.replace(/\/\.(?=\/)/g, '');
+    // Git-Bash drive form /c/users/... also matched as c:/users/...
+    const drive = dotless.replace(/(^|[\s'"=(:])\/([a-z])\//g, '$1$2:/');
+    variants.push(slashed, dotless, drive);
   }
   return variants;
 }
@@ -84,16 +87,21 @@ export function decide(toolName: string, toolInput: Record<string, unknown>, env
     }
     if (toolName === 'Glob' && typeof toolInput['pattern'] === 'string') {
       const pat = toolInput['pattern'];
-      if (/^([a-z]:)?[\\/]/i.test(pat) || pat.startsWith('~')) targets.push(pat);
+      if (/^([a-z]:)?[\\/]/i.test(pat) || pat.startsWith('~')) targets.push(pat.replace(/[\\/][^\\/]*[*?[{].*$/, '') || '/');
     }
+    const searchTool = toolName === 'Grep' || toolName === 'Glob';
+    const proj = env.projectDir ? normalizePath(env.projectDir) : '';
+    // ancestor check: a search rooted above a protected root would read it.
+    // Plugin root (readable) and project-level settings (always inside projectDir) are excluded.
+    const ancestorRoots = all.filter((r) => r !== plugin && !(proj && r.startsWith(proj + '/.claude/')));
+    const hasPath = PATH_KEYS.some((k) => toolInput[k] !== undefined);
+    if (searchTool && !hasPath && env.projectDir) targets.push(env.projectDir);
     for (const t of targets) {
       const raw = /^([a-z]:)?[\\/]/i.test(t) || t.startsWith('~') ? t : `${env.projectDir}\\${t}`;
       const p = normalizePath(t.startsWith('~') ? env.userProfile + t.slice(1) : raw);
-      if (READ_ONLY_TOOLS.has(toolName) && plugin && isInside(p, plugin)) {
-        // reading the plugin is harmless, unless it also falls in another protected path
-        if (!all.some((r) => r !== plugin && isInside(p, r))) continue;
-      }
-      if (all.some((r) => isInside(p, r))) {
+      const protectedHit = all.some((r) => isInside(p, r) && !(READ_ONLY_TOOLS.has(toolName) && r === plugin));
+      const ancestorHit = searchTool && ancestorRoots.some((r) => isInside(r, p));
+      if (protectedHit || ancestorHit) {
         return deny('Blocked: this path holds Bitwarden data, broker config/code or Claude settings and is off limits to Claude.');
       }
     }
@@ -107,6 +115,9 @@ export function decide(toolName: string, toolInput: Record<string, unknown>, env
     if (/@bitwarden\/cli/i.test(command)) return deny('Blocked: the Bitwarden CLI may not be run directly; use the broker tools.');
     if (UI_AUTOMATION.test(command)) return deny('Blocked: UI automation could answer approval dialogs.');
     const variants = normalizeCommand(command, env);
+    if (variants.some((v) => v.includes('.claude/settings.json') || v.includes('.claude/settings.local.json'))) {
+      return deny('Blocked: command references Claude settings files.');
+    }
     if (all.some((r) => variants.some((v) => v.includes(r)))) {
       return deny('Blocked: command references a protected path (Bitwarden data, broker files or Claude settings).');
     }
