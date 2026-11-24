@@ -79,6 +79,8 @@ describe('TokenManager', () => {
     s.advance(56 * 60_000);
     await s.tm.getAccessToken(cred, res);
     expect(s.browser.authorize).toHaveBeenCalledTimes(2);
+    expect(s.calls[1]!.body.get('grant_type')).toBe('refresh_token');
+    expect(s.calls[2]!.body.get('grant_type')).toBe('authorization_code');
   });
 
   it('error message has the error code only and never the body', async () => {
@@ -103,6 +105,8 @@ describe('TokenManager', () => {
     const s = setup([() => tokenResp(1)]);
     const { token } = await s.tm.getAccessToken(cred, res);
     expect(s.redactor.scrub(`x ${token} y refresh-token-1`)).toBe('x [REDACTED] y [REDACTED]');
+    const id = jwt({ preferred_username: 'admin@acme.com' });
+    expect(s.redactor.scrub(`id ${id}`)).toBe('id [REDACTED]');
   });
 
   it('rejects a token for a different account and drops the cache', async () => {
@@ -120,6 +124,27 @@ describe('TokenManager', () => {
     s.advance(56 * 60_000);
     const err = await s.tm.getAccessToken(cred, res).catch((e) => e);
     expect(err.code).toBe('wrong_account');
+    expect(s.browser.authorize).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the previous refresh token when the response omits one', async () => {
+    const noRefresh = () =>
+      new Response(JSON.stringify({ access_token: jwt({ upn: 'admin@acme.com', n: 2 }), id_token: jwt({ preferred_username: 'admin@acme.com' }), expires_in: 3600 }), { status: 200 });
+    const s = setup([() => tokenResp(1), noRefresh, () => tokenResp(3)]);
+    await s.tm.getAccessToken(cred, res);
+    s.advance(56 * 60_000);
+    await s.tm.getAccessToken(cred, res);
+    s.advance(56 * 60_000);
+    await s.tm.getAccessToken(cred, res);
+    expect(s.calls[2]!.body.get('grant_type')).toBe('refresh_token');
+    expect(s.calls[2]!.body.get('refresh_token')).toBe('refresh-token-1');
+  });
+
+  it('launches one browser for concurrent acquisitions of different keys', async () => {
+    const s = setup([() => tokenResp(1), () => tokenResp(2)]);
+    const exo: Resource = { ...res, key: 'exo' };
+    await Promise.all([s.tm.getAccessToken(cred, res), s.tm.getAccessToken(cred, exo)]);
+    expect(s.getBrowser).toHaveBeenCalledTimes(1);
   });
 
   it('shares one in-flight acquisition', async () => {

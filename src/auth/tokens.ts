@@ -38,7 +38,7 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v 
 export class TokenManager {
   private cache = new Map<string, CacheEntry>();
   private inflight = new Map<string, Promise<{ token: string; upn: string }>>();
-  private browser: SignInBrowser | undefined;
+  private browserP: Promise<SignInBrowser> | undefined;
   private now: () => number;
 
   constructor(private deps: TokenManagerDeps) {
@@ -57,9 +57,9 @@ export class TokenManager {
   async drop(alias?: string): Promise<void> {
     if (alias === undefined) {
       this.cache.clear();
-      const b = this.browser;
-      this.browser = undefined;
-      if (b) await b.close();
+      const bp = this.browserP;
+      this.browserP = undefined;
+      if (bp) await (await bp).close();
       return;
     }
     for (const k of [...this.cache.keys()]) if (k.startsWith(`${alias}:`)) this.cache.delete(k);
@@ -78,8 +78,9 @@ export class TokenManager {
         this.cache.delete(key);
       }
     }
-    if (!this.browser) this.browser = await this.deps.getBrowser();
-    const { code, verifier } = await this.browser.authorize({
+    this.browserP ??= this.deps.getBrowser();
+    const browser = await this.browserP;
+    const { code, verifier } = await browser.authorize({
       authority: this.deps.authority,
       tenant: cred.tenant,
       resource,
@@ -107,6 +108,7 @@ export class TokenManager {
         refresh_token: refreshToken,
         scope: resource.scopes.join(' '),
       }),
+      refreshToken,
     );
   }
 
@@ -119,7 +121,7 @@ export class TokenManager {
     return { token: entry.token, upn: entry.upn };
   }
 
-  private async post(tenant: string, body: URLSearchParams): Promise<CacheEntry> {
+  private async post(tenant: string, body: URLSearchParams, previousRefresh?: string): Promise<CacheEntry> {
     let res: Response;
     try {
       res = await this.deps.fetch(`${this.deps.authority}/${tenant}/oauth2/v2.0/token`, {
@@ -149,6 +151,6 @@ export class TokenManager {
     const ac = claims(accessToken);
     const upn = str(idc.preferred_username) ?? str(ac.upn) ?? str(ac.unique_name) ?? '';
     const expiresIn = typeof json.expires_in === 'number' ? json.expires_in : Number(json.expires_in) || 3600;
-    return { token: accessToken, refreshToken, upn, expiresAt: this.now() + expiresIn * 1000 };
+    return { token: accessToken, refreshToken: refreshToken ?? previousRefresh, upn, expiresAt: this.now() + expiresIn * 1000 };
   }
 }
