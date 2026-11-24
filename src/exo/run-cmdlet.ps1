@@ -59,6 +59,11 @@ try {
         }
         # $ErrorActionPreference does not reach module functions; force it per call.
         $params['ErrorAction'] = 'Stop'
+        # The user already approved this change in the broker's dialog. Without this, ConfirmImpact=High
+        # cmdlets (Remove-*) try to prompt and fail under -NonInteractive. The broker rejects a caller Confirm.
+        if (($name -cnotlike 'Get-*') -and $cmd.Parameters.ContainsKey('Confirm')) {
+            $params['Confirm'] = $false
+        }
         $result = & $cmd @params 3>$null 4>$null 5>$null 6>$null
         $envelope = @{ ok = $true; result = $result }
     }

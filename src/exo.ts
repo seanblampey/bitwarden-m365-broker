@@ -67,9 +67,11 @@ function parseEnvelope(stdout: string): { ok: boolean; result?: unknown; error?:
 const FORBIDDEN_COMMON = new Set([
   'erroraction', 'errorvariable', 'warningaction', 'warningvariable', 'informationaction',
   'informationvariable', 'outvariable', 'outbuffer', 'pipelinevariable',
+  // The broker's dialog is the confirmation; run-cmdlet.ps1 sets Confirm:$false itself. WhatIf stays allowed.
+  'confirm',
 ]);
 
-/** Rejects PowerShell common parameters that would redirect output or errors. */
+/** Rejects PowerShell common parameters that would redirect output or errors, and Confirm (the broker owns it). */
 export function assertNoForbiddenCommon(parameters: Record<string, unknown>): void {
   for (const k of Object.keys(parameters)) {
     if (FORBIDDEN_COMMON.has(k.toLowerCase())) {

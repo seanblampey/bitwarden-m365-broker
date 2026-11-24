@@ -44,6 +44,16 @@ describe('runCmdlet', () => {
     }
     expect(r).not.toHaveBeenCalled();
   });
+  it('rejects a caller-supplied Confirm but allows WhatIf', async () => {
+    const r = runner(JSON.stringify({ ok: true, result: null }));
+    for (const k of ['Confirm', 'confirm', 'CONFIRM']) {
+      await expect(runCmdlet(r, { ...base, cmdlet: 'Remove-InboxRule', parameters: { Identity: 'x', [k]: false } }))
+        .rejects.toMatchObject({ code: 'invalid_parameters', message: `Invalid parameters: ${k} is not allowed` });
+    }
+    expect(r).not.toHaveBeenCalled();
+    await expect(runCmdlet(r, { ...base, cmdlet: 'Remove-InboxRule', parameters: { Identity: 'x', WhatIf: true } })).resolves.toBeNull();
+    expect(r).toHaveBeenCalledOnce();
+  });
   it('maps garbage output / crashes to a generic error without stderr', async () => {
     for (const r of [runner('not json'), runner('', 1), (async () => { throw new Error('x'); }) as PsRunner]) {
       await expect(runCmdlet(r, base)).rejects.toMatchObject({ code: 'exo_failed', message: 'Exchange Online PowerShell failed unexpectedly.' });
@@ -61,6 +71,14 @@ describe('run-cmdlet.ps1', () => {
     expect(src).toContain('Disconnect-ExchangeOnline');
     expect(src).toContain("$params['ErrorAction'] = 'Stop'");
     expect(src).toContain("[version]'3.1.0'");
+  });
+  it('sets Confirm:$false for approved (non-Get) cmdlets that have a Confirm parameter', () => {
+    const block = /if \(\(\$name -cnotlike 'Get-\*'\) -and \$cmd\.Parameters\.ContainsKey\('Confirm'\)\) \{\s*\$params\['Confirm'\] = \$false\s*\}/;
+    expect(src).toMatch(block);
+    // set after the caller's parameters are copied and before the cmdlet runs
+    const set = src.indexOf("$params['Confirm'] = $false");
+    expect(set).toBeGreaterThan(src.indexOf('ConvertTo-Param $p.Value'));
+    expect(set).toBeLessThan(src.indexOf('& $cmd @params'));
   });
   const hasPwsh = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major']).status === 0;
   it.skipIf(!hasPwsh)('refuses Get-Content via a stub module', () => {
