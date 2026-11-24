@@ -2,7 +2,7 @@ import type { AuditLog } from './audit.js';
 import { buildGraphUrl, isCmdletRead, isGraphRead, validateCmdlet, validateParameters, type GraphMethod } from './classify.js';
 import type { BrokerConfig } from './config.js';
 import { BrokerError } from './errors.js';
-import { runCmdlet, type PsRunner } from './exo.js';
+import { assertNoForbiddenCommon, runCmdlet, type PsRunner } from './exo.js';
 import { graphRequest } from './graph.js';
 import type { Redactor } from './redact.js';
 import { EXO_RESOURCE, graphResource } from './auth/resources.js';
@@ -38,6 +38,11 @@ function truncate(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
+/** Cuts the dialog body to `max` characters and says how much was left out. */
+function truncateBody(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}\n… (${s.length - max} more characters not shown)` : s;
+}
+
 /** PowerShell-style rendering of one parameter value, for the approval dialog only. */
 function psValue(v: unknown): string {
   if (v === null) return '$null';
@@ -59,7 +64,7 @@ function cmdletAction(cmdlet: string, parameters: Record<string, unknown>): stri
 function graphAction(method: GraphMethod, path: string, body: unknown): string {
   const head = `Graph ${method} ${truncate(path, MAX_ACTION)}`;
   if (body === undefined) return head;
-  return `${head}\n${truncate(JSON.stringify(body, null, 2) ?? String(body), MAX_ACTION_BODY)}`;
+  return `${head}\n${truncateBody(JSON.stringify(body, null, 2) ?? String(body), MAX_ACTION_BODY)}`;
 }
 
 /** Ties vault, sign-in, approval and executors together. Every method returns redacted JSON text. */
@@ -96,8 +101,10 @@ export class Broker {
       buildGraphUrl(path, apiVersion);
       const cred = await this.deps.vault.getCredential(tenant);
       const { token, upn } = await this.deps.tokens.getAccessToken(cred, graphResource(this.deps.config.graphScopes));
-      if (!isGraphRead(method)) await this.approve(tenant, cred, upn, graphAction(method, path, body), `${method} ${path}`);
-      this.deps.audit.write({ type: 'call', tenant, detail: `${method} ${path}` });
+      // Query strings can carry values ($filter=...), so the audit log records the path only.
+      const detail = `${method} ${path.split('?')[0]}`;
+      if (!isGraphRead(method)) await this.approve(tenant, cred, upn, graphAction(method, path, body), detail);
+      this.deps.audit.write({ type: 'call', tenant, detail });
       return graphRequest(this.deps.fetch, token, { method, path, body, apiVersion });
     });
   }
@@ -106,6 +113,7 @@ export class Broker {
     return this.run(tenant, async () => {
       validateCmdlet(cmdlet);
       const params = validateParameters(parameters ?? {});
+      assertNoForbiddenCommon(params);
       const cred = await this.deps.vault.getCredential(tenant);
       const { token, upn } = await this.deps.tokens.getAccessToken(cred, EXO_RESOURCE);
       if (!isCmdletRead(cmdlet)) await this.approve(tenant, cred, upn, cmdletAction(cmdlet, params), cmdlet);

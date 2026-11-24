@@ -1,4 +1,5 @@
-import { pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -125,8 +126,26 @@ export async function main(): Promise<void> {
   await createServer(broker).connect(new StdioServerTransport());
 }
 
-const entry = process.argv[1];
-if (entry && import.meta.url === pathToFileURL(entry).href) {
+/** True when `metaUrl` is the script node was started with (symlinks resolved; case-insensitive on Windows). */
+export function isEntryPoint(
+  metaUrl: string,
+  argv1: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+  realpath: (p: string) => string = (p) => realpathSync(p),
+): boolean {
+  if (!argv1) return false;
+  let self: string;
+  let entry: string;
+  try {
+    self = realpath(fileURLToPath(metaUrl));
+    entry = realpath(argv1);
+  } catch {
+    return false;
+  }
+  return platform === 'win32' ? self.toLowerCase() === entry.toLowerCase() : self === entry;
+}
+
+if (isEntryPoint(import.meta.url, process.argv[1])) {
   main().catch((e) => {
     // BrokerError messages are secret-free by contract; anything else is not echoed.
     process.stderr.write(`claude-bw-broker: failed to start${e instanceof BrokerError ? `: ${e.message}` : ''}\n`);

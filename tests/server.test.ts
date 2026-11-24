@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createServer } from '../src/server.js';
+import { createServer, isEntryPoint } from '../src/server.js';
 import type { Broker } from '../src/broker.js';
 
 function fakeBroker() {
@@ -66,5 +66,25 @@ describe('MCP server', () => {
     expect(broker.connect).toHaveBeenCalledWith('acme');
     expect(broker.disconnect).toHaveBeenCalledWith(undefined);
     expect(broker.lock).toHaveBeenCalledOnce();
+  });
+});
+
+describe('isEntryPoint', () => {
+  const id = (p: string) => p;
+  it('matches the same path, case-insensitively only on win32', () => {
+    const url = 'file:///C:/Plugins/Broker/dist/server.js';
+    const winPath = new URL(url).pathname; // the path fileURLToPath yields on this host
+    expect(isEntryPoint(url, winPath, 'linux', id)).toBe(true);
+    expect(isEntryPoint(url, winPath.toLowerCase(), 'win32', id)).toBe(true);
+    expect(isEntryPoint(url, winPath.toLowerCase(), 'linux', id)).toBe(false);
+    expect(isEntryPoint(url, '/other/server.js', 'win32', id)).toBe(false);
+  });
+  it('is false when argv[1] is missing or cannot be resolved', () => {
+    expect(isEntryPoint('file:///x/server.js', undefined, 'win32', id)).toBe(false);
+    const fail = () => { throw new Error('ENOENT'); };
+    expect(isEntryPoint('file:///x/server.js', '/x/server.js', 'win32', fail)).toBe(false);
+  });
+  it('resolves real paths by default', () => {
+    expect(isEntryPoint(import.meta.url, new URL(import.meta.url).pathname)).toBe(true);
   });
 });

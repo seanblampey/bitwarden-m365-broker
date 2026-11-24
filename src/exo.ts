@@ -69,14 +69,19 @@ const FORBIDDEN_COMMON = new Set([
   'informationvariable', 'outvariable', 'outbuffer', 'pipelinevariable',
 ]);
 
-export async function runCmdlet(run: PsRunner, args: CmdletArgs): Promise<unknown> {
-  validateCmdlet(args.cmdlet);
-  const parameters = validateParameters(args.parameters);
+/** Rejects PowerShell common parameters that would redirect output or errors. */
+export function assertNoForbiddenCommon(parameters: Record<string, unknown>): void {
   for (const k of Object.keys(parameters)) {
     if (FORBIDDEN_COMMON.has(k.toLowerCase())) {
       throw new BrokerError('invalid_parameters', `Invalid parameters: ${k} is not allowed`);
     }
   }
+}
+
+export async function runCmdlet(run: PsRunner, args: CmdletArgs): Promise<unknown> {
+  validateCmdlet(args.cmdlet);
+  const parameters = validateParameters(args.parameters);
+  assertNoForbiddenCommon(parameters);
   let out: { code: number; stdout: string; stderr: string };
   try {
     out = await run(JSON.stringify({ ...args, parameters }));

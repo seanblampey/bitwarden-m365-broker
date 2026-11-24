@@ -90,12 +90,33 @@ describe('Broker graphRequest', () => {
     expect(t.order).toEqual(['vault', 'token', 'confirm', 'fetch']);
   });
 
-  it('caps the body shown in the dialog at 1500 characters', async () => {
+  it('caps the body shown in the dialog at 1500 characters with a visible notice', async () => {
     const t = setup({ confirm: true });
-    await t.broker.graphRequest('acme', 'POST', '/users', { note: 'n'.repeat(5000) });
+    const body = { note: 'n'.repeat(5000) };
+    await t.broker.graphRequest('acme', 'POST', '/users', body);
     const action = t.confirm.mock.calls[0][0].action;
-    const bodyPart = action.split('\n').slice(1).join('\n');
-    expect(bodyPart.length).toBeLessThanOrEqual(1500);
+    const full = JSON.stringify(body, null, 2);
+    expect(action).toBe(`Graph POST /users\n${full.slice(0, 1500)}\n… (${full.length - 1500} more characters not shown)`);
+  });
+
+  it('redacts the password in the action shown in the dialog', async () => {
+    const t = setup({ confirm: false });
+    await t.broker.graphRequest('acme', 'PATCH', '/users/x', { passwordProfile: { password: PASSWORD } });
+    const action = t.confirm.mock.calls[0][0].action;
+    expect(action).not.toContain(PASSWORD);
+    expect(action).toContain('[REDACTED]');
+  });
+
+  it('audits Graph calls without the query string', async () => {
+    const t = setup({ confirm: true });
+    await t.broker.graphRequest('acme', 'GET', "/users?$filter=mail eq 'x@acme.com'");
+    await t.broker.graphRequest('acme', 'PATCH', '/users/x?$select=id', { city: 'Oslo' });
+    expect(t.events).toEqual([
+      { type: 'call', tenant: 'acme', detail: 'GET /users' },
+      { type: 'approved', tenant: 'acme', detail: 'PATCH /users/x' },
+      { type: 'call', tenant: 'acme', detail: 'PATCH /users/x' },
+    ]);
+    for (const e of t.events) expect(e.detail).not.toContain('acme.com');
   });
 
   it('invalid path: no vault, no confirm, invalid_path', async () => {
@@ -172,6 +193,16 @@ describe('Broker exoCmdlet', () => {
     expect(parse(await t.broker.exoCmdlet('acme', 'Set-Mailbox', { 'a b': 1 })).error).toBe('invalid_parameters');
     expect(t.vault.getCredential).not.toHaveBeenCalled();
     expect(t.confirm).not.toHaveBeenCalled();
+  });
+
+  it('forbidden common parameters are rejected before vault, sign-in or dialog', async () => {
+    const t = setup({ confirm: true });
+    const out = parse(await t.broker.exoCmdlet('acme', 'Set-Mailbox', { Identity: 'x', ErrorAction: 'SilentlyContinue' }));
+    expect(out.error).toBe('invalid_parameters');
+    expect(t.vault.getCredential).not.toHaveBeenCalled();
+    expect(t.tokens.getAccessToken).not.toHaveBeenCalled();
+    expect(t.confirm).not.toHaveBeenCalled();
+    expect(t.exo).not.toHaveBeenCalled();
   });
 
   it('redacts results that echo the password', async () => {
