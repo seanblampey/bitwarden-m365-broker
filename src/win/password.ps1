@@ -42,7 +42,8 @@ try {
 
   $form.AcceptButton = $ok     # Enter = OK
   $form.CancelButton = $cancel # Esc = Cancel
-  $form.Add_Shown({ $form.Activate(); $box.Focus() | Out-Null })
+  # Claude Code is usually in the foreground: re-assert TopMost and pull focus to the box once shown.
+  $form.Add_Shown({ $form.TopMost = $true; $form.Activate(); $form.BringToFront(); $box.Focus() | Out-Null })
 
   $result = $form.ShowDialog()
   if ($result -eq [System.Windows.Forms.DialogResult]::OK) {

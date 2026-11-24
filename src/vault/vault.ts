@@ -13,6 +13,7 @@ export interface Credential {
 
 export interface VaultDeps {
   bw: BwClient;
+  /** null = user cancelled; a failed or timed-out dialog rejects with BrokerError('dialog_failed'), passed through as is. */
   promptPassword: () => Promise<string | null>;
   redactor: Redactor;
   audit: AuditLog;

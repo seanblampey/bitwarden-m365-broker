@@ -40,6 +40,16 @@ describe('Vault', () => {
     const { vault } = setup({ prompts: [null] });
     await expect(vault.listTenants()).rejects.toMatchObject({ code: 'unlock_cancelled' });
   });
+  it('dialog_failed (not unlock_cancelled) when the password dialog fails; next call prompts again', async () => {
+    const { vault, bw, promptPassword } = setup();
+    promptPassword.mockImplementationOnce(async () => {
+      throw new BrokerError('dialog_failed', 'The Windows dialog could not be shown or timed out.');
+    });
+    await expect(vault.listTenants()).rejects.toMatchObject({ code: 'dialog_failed' });
+    expect(bw.unlock).not.toHaveBeenCalled();
+    expect(await vault.listTenants()).toEqual(['contoso-admin', 'fabrikam', 'adatum']);
+    expect(promptPassword).toHaveBeenCalledTimes(2);
+  });
   it('not_logged_in when unauthenticated, without prompting', async () => {
     const { vault, promptPassword } = setup({ status: 'unauthenticated' });
     await expect(vault.listTenants()).rejects.toMatchObject({ code: 'not_logged_in' });
