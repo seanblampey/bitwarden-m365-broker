@@ -7,7 +7,7 @@ This plugin lets Claude Code do Microsoft 365 admin work (Microsoft Graph and Ex
 How it keeps secrets away from Claude:
 
 - Claude only gets six tools: `list_tenants`, `connect`, `graph_request`, `exo_cmdlet`, `disconnect`, `lock`. None of them returns a password, MFA code or token.
-- A small local program (the "broker") unlocks Bitwarden after you type your master password into a Windows dialog, signs in to Microsoft in a hidden Edge window, generates the MFA code itself, and keeps the tokens in memory only.
+- A small local program (the "broker") unlocks Bitwarden after you type your master password into a Windows dialog, signs in to Microsoft in a hidden Edge window (you can make it visible, see the config), generates the MFA code itself, and keeps the tokens in memory only.
 - Reads (Graph `GET`, Exchange `Get-` cmdlets) run straight away. Anything else shows a Yes/No dialog, with No pre-selected, and only runs if you click Yes.
 - Every result is scrubbed of anything that looks like a secret. A hook stops Claude from running the `bw` command, and from touching (with its file tools or in a shell command) the Bitwarden data folders, the broker's config folder (`%APPDATA%\claude-bw-broker`) and audit log folder (`%LOCALAPPDATA%\claude-bw-broker`), Claude's `settings.json`/`settings.local.json` files (user and project), and `%USERPROFILE%\.claude\plugins` (Claude may still read this plugin's own files). Any shell command that mentions `.claude` together with `settings` or `plugins` is also blocked.
 - Only things in the Bitwarden folder `Claude Access` are usable.
@@ -18,7 +18,8 @@ How it keeps secrets away from Claude:
 - Claude Code running on that PC
 - Bitwarden CLI
 - Microsoft Edge
-- Windows PowerShell 5.1 (`powershell.exe`, built into Windows) with the ExchangeOnlineManagement module (version 3.1.0 or newer) and Microsoft.Graph.Authentication
+- Windows PowerShell 5.1 (`powershell.exe`, built into Windows) with the ExchangeOnlineManagement module (version 3.1.0 or newer)
+- Optional: the Microsoft.Graph.Authentication module, only if you prefer granting per-tenant consent with `Connect-MgGraph` instead of the consent link
 
 ## One-time setup
 
@@ -31,7 +32,7 @@ How it keeps secrets away from Claude:
    - Authenticator key (TOTP): the secret seed from the account's authenticator-app setup. Only authenticator-app codes are supported.
    - A custom field of type Text named `tenant`, with the tenant's domain (for example `contoso.onmicrosoft.com`).
 5. Open **Windows PowerShell** (`powershell.exe`, not PowerShell 7 / `pwsh`) and install the Exchange module: `Install-Module ExchangeOnlineManagement -Scope CurrentUser` (needs 3.1.0 or newer).
-6. In the same Windows PowerShell window, install the Graph sign-in module used for the consent step: `Install-Module Microsoft.Graph.Authentication -Scope CurrentUser`.
+6. Optional: in the same Windows PowerShell window, install the Graph sign-in module if you want to grant consent with `Connect-MgGraph` (see "Per-tenant consent"): `Install-Module Microsoft.Graph.Authentication -Scope CurrentUser`.
 
    Why Windows PowerShell: the broker always runs `powershell.exe` (5.1). `Install-Module -Scope CurrentUser` run from PowerShell 7 puts modules in `Documents\PowerShell\Modules`, which Windows PowerShell does not search, so the broker would report the module as not installed. Check with `powershell.exe -NoProfile -Command "Get-Module -ListAvailable ExchangeOnlineManagement"`.
 
@@ -46,9 +47,15 @@ There is nothing to build or download: the ready-to-run plugin is committed in `
 
 Restart Claude Code if prompted. Node.js 20+ must be on your PATH, because Claude Code starts the broker and the hook with `node`.
 
-The repository is private, so Claude Code clones it with your own Git login. If the marketplace add fails with an authentication error, sign Git in to GitHub first (for example, run `gh auth login`, or clone any private repo once so Git Credential Manager saves your login), then try again.
+To update later: `/plugin marketplace update bitwarden-m365`, then restart Claude Code. If the update fails, remove and re-add the marketplace:
 
-To update later: `/plugin marketplace update bitwarden-m365`, then reinstall or restart when prompted.
+```
+/plugin marketplace remove bitwarden-m365
+/plugin marketplace add seanblampey/bitwarden-m365-broker
+/plugin install bitwarden-m365@bitwarden-m365
+```
+
+Claude Code runs whatever is on this repository's `master` branch, and that code handles your logins once you unlock Bitwarden. Only install or update from a source you trust, and look at what changed before updating.
 
 ### For developers
 
@@ -71,20 +78,31 @@ The audit log (what was called, approved or denied; never secrets) is at `%LOCAL
 
 ## Per-tenant consent
 
-The broker signs in using Microsoft's own public apps (Microsoft Graph Command Line Tools and Exchange Online PowerShell). It never clicks "Accept" on a consent page. If a tenant has not yet allowed those apps for the admin account, `connect` returns `signin_failed` with category `needs_consent`. The error message then includes the exact fix for that tenant: a one-click admin-consent link and the `Connect-MgGraph` command with the right scopes. Expect this once for each tenant that has never used Microsoft Graph Command Line Tools.
+The broker signs in with Microsoft's own public apps, Microsoft Graph Command Line Tools and Exchange Online PowerShell. The first time a tenant is used, Microsoft may ask an administrator to approve the app. The broker never clicks "Accept" on a consent page, so `connect` stops with `signin_failed`, category `needs_consent`. Expect this once for each tenant that has never used Microsoft Graph Command Line Tools.
 
-To fix it once per tenant, in your own Windows PowerShell (not through Claude), sign in as that admin and accept the consent prompt yourself, asking for the same permissions the broker requests:
+The error message contains the fix for that tenant. Do one of these yourself (not through Claude), signed in as that tenant's admin, then run `connect` again:
 
-```
-Connect-MgGraph -Scopes "User.ReadWrite.All","Group.ReadWrite.All","Directory.ReadWrite.All","MailboxSettings.ReadWrite","Organization.Read.All","Reports.Read.All","AuditLog.Read.All","TeamSettings.ReadWrite.All"
-```
+1. **Consent link (easiest).** Open the link from the error message in your browser and click Accept. The link has this form, with the tenant filled in and the permissions from your config:
 
-Tick "Consent on behalf of your organization" on the Microsoft page. Alternatively grant admin consent to "Microsoft Graph Command Line Tools" in Entra admin center under Enterprise applications. If you changed `graphScopes` in the config, change this list to match. For Exchange, run `Connect-ExchangeOnline` once the same way if sign-in still reports consent. Then try `connect` again.
+   ```
+   https://login.microsoftonline.com/<tenant>/v2.0/adminconsent?client_id=14d82eec-204b-4c2f-b7e8-296a70dab67e&scope=<Graph permissions>&redirect_uri=http%3A%2F%2Flocalhost
+   ```
+
+   Afterwards the browser shows a "can't reach localhost" page. That is expected: consent is already done.
+
+2. **PowerShell.** In Windows PowerShell (needs the Microsoft.Graph.Authentication module), run the command from the error message, which looks like this for the default permissions:
+
+   ```
+   Connect-MgGraph -TenantId <tenant> -Scopes "User.ReadWrite.All","Group.ReadWrite.All","Directory.ReadWrite.All","MailboxSettings.ReadWrite","Organization.Read.All","Reports.Read.All","AuditLog.Read.All","TeamSettings.ReadWrite.All"
+   ```
+
+   Tick "Consent on behalf of your organization" before accepting.
+
+If you changed `graphScopes` in the config, the link and command in the error message already match it. If Exchange reports `needs_consent`, run `Connect-ExchangeOnline` once yourself, sign in as the tenant's admin and accept.
 
 ## Using it
 
 Each Bitwarden item in the folder appears under its own name. If two items share a name, they appear as "name (username)", with "#2", "#3" added if that still repeats, so every name `list_tenants` returns is unique.
-
 
 Just ask Claude, naming the tenant alias:
 
@@ -103,7 +121,8 @@ Claude is told to explain every change in chat before the Yes/No box appears.
 - Approved Exchange cmdlets run with `-Confirm:$false` (your Yes is the confirmation), so `Remove-*` cmdlets do not prompt again. Claude cannot pass `Confirm` itself; `WhatIf` is allowed.
 - Only authenticator-app (TOTP) MFA is supported. Federated sign-in is not.
 - The hook blocks plain use of `bw`, but deliberately obfuscated calls are not caught.
-- The PowerShell scripts and the Microsoft sign-in page automation have only been tested against fakes, not against real Windows or real Microsoft pages. The checklist below is the real test. Microsoft changing its sign-in page can break sign-in (reported as `signin_failed` with category `page_changed`).
+- Tested on real Windows 11 so far: the plugin installs from GitHub, the Bitwarden unlock dialog and `list_tenants` work, and Microsoft sign-in runs through to the consent prompt. Not yet confirmed on a real tenant: completed sign-in, Graph and Exchange calls, and the approval dialog. Work through the checklist below before relying on it.
+- Microsoft can change its sign-in pages at any time. When the broker meets a page it does not recognise, it stops with `signin_failed`, category `page_changed`, and the message says which page it was.
 
 ## Windows verification checklist
 
@@ -111,7 +130,7 @@ Run these on a real Windows PC with a test tenant before relying on it.
 
 1. Ask Claude to run `list_tenants`. Expected: a password dialog appears on top (not hidden, no stray console window) and takes keyboard focus even while Claude Code's terminal is in the foreground; typing the master password and pressing Enter returns your aliases.
 2. Run `lock`, then `list_tenants` again and click Cancel in the dialog. Expected: error `unlock_cancelled`, no hang.
-3. `connect` to a real tenant. Expected: returns the admin's account name, no visible browser window.
+3. `connect` to a real tenant. Expected: returns the admin's account name, no visible browser window. The first time, it may stop with `needs_consent`: follow "Per-tenant consent", then repeat.
 4. `graph_request` GET `/organization`. Expected: tenant details, no dialog.
 5. `exo_cmdlet Get-Mailbox -ResultSize 1`. Expected: one mailbox, no dialog.
 6. `exo_cmdlet Get-Mailbox -Identity nosuchuser`. Expected: an error (`exo_failed`), not an empty result.
