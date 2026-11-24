@@ -8,6 +8,9 @@ import { totp } from '../src/crypto.js';
 const SEED = 'JBSWY3DPEHPK3PXP';
 const USER = 'admin@contoso.com';
 const PASS = 'Sup3r-Secret-Pw!';
+const USER2 = 'ops@fabrikam.com';
+const PASS2 = 'An0ther-Secret!';
+const codeUser = (code: string) => Buffer.from(code.split('-')[1], 'base64url').toString();
 const EXE = '/opt/pw-browsers/chromium';
 const res = (key: 'graph' | 'exo'): Resource => ({ key, clientId: `client-${key}`, redirectUri: 'http://localhost:1/cb', scopes: ['openid', `${key}.read`] });
 
@@ -23,7 +26,8 @@ afterEach(async () => {
 async function setup(opts: Partial<FakeLoginOpts> = {}) {
   site = await startFakeLogin({ username: USER, password: PASS, seed: SEED, ...opts });
   browser = await SignInBrowser.launch({ executablePath: existsSync(EXE) ? EXE : undefined, stepTimeoutMs: 2000, overallTimeoutMs: 10000 });
-  const params = (key: 'graph' | 'exo' = 'graph'): SignInParams => ({ authority: site!.url, tenant: 'contoso.com', resource: res(key), username: USER, password: PASS, totpSeed: SEED });
+  const params = (key: 'graph' | 'exo' = 'graph', username = USER, password = PASS): SignInParams =>
+    ({ authority: site!.url, tenant: 'contoso.com', resource: res(key), username, password, totpSeed: SEED });
   return { site, browser, params };
 }
 
@@ -64,6 +68,31 @@ describe('SignInBrowser.authorize', () => {
     const r = await browser.authorize(params('exo'));
     expect(r.code).toMatch(/^CODE-/);
     expect(site.passwordPageViews()).toBe(views);
+  });
+
+  it('does not reuse one account\'s session for another account', async () => {
+    const { browser, params, site } = await setup({ users: { [USER2]: PASS2 } });
+    expect(codeUser((await browser.authorize(params('graph'))).code)).toBe(USER);
+    const views = site.passwordPageViews();
+    const r = await browser.authorize(params('graph', USER2, PASS2));
+    expect(site.passwordPageViews()).toBe(views + 1);
+    expect(codeUser(r.code)).toBe(USER2);
+    // Both accounts now have sessions; each still gets its own code silently.
+    expect(codeUser((await browser.authorize(params('exo', USER.toUpperCase()))).code)).toBe(USER);
+    expect(site.passwordPageViews()).toBe(views + 1);
+  });
+
+  it('serialises concurrent authorize calls so each gets its own code', async () => {
+    const { browser, params } = await setup({ users: { [USER2]: PASS2 } });
+    const [a, b] = await Promise.all([browser.authorize(params('graph')), browser.authorize(params('graph', USER2, PASS2))]);
+    expect(codeUser(a.code)).toBe(USER);
+    expect(codeUser(b.code)).toBe(USER2);
+    expect(a.verifier).not.toBe(b.verifier);
+  });
+
+  it('rejects a redirect whose state does not match', async () => {
+    const { browser, params } = await setup({ wrongState: true });
+    expect((await category(browser.authorize(params()))).category).toBe('page_changed');
   });
 
   it('switches from push to a verification code when offered', async () => {

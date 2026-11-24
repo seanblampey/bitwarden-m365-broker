@@ -1,5 +1,6 @@
 import { chromium, type Browser, type BrowserContext, type Page, type Request, type Route } from 'playwright-core';
 import { BrokerError } from '../errors.js';
+import { randomBytes } from 'node:crypto';
 import { pkcePair, totp } from '../crypto.js';
 import type { Resource } from './resources.js';
 
@@ -84,6 +85,11 @@ async function detectState(page: Page, authorityHost: string, username: string):
   return 'none';
 }
 
+/** Secrets are only ever typed into pages served by the authority itself. */
+function onAuthority(page: Page, authorityHost: string): boolean {
+  try { return new URL(page.url()).host === authorityHost; } catch { return false; }
+}
+
 function mapAuthError(error: string, description: string): SignInCategory {
   const s = `${error} ${description}`;
   if (/AADSTS5300[03]\b/.test(s)) return 'conditional_access';
@@ -95,7 +101,10 @@ function mapAuthError(error: string, description: string): SignInCategory {
 type Outcome = { code: string } | { category: SignInCategory };
 
 export class SignInBrowser {
-  private signedIn = false;
+  /** Lower-cased usernames that completed sign-in in this context (silent SSO only for them). */
+  private readonly signedIn = new Set<string>();
+  /** Serialises authorize(): the redirect route is context-wide, so calls must not overlap. */
+  private queue: Promise<unknown> = Promise.resolve();
 
   private constructor(
     private readonly browser: Browser,
@@ -114,8 +123,16 @@ export class SignInBrowser {
     return new SignInBrowser(browser, context, opts.stepTimeoutMs ?? 15_000, opts.overallTimeoutMs ?? 60_000);
   }
 
-  async authorize(p: SignInParams): Promise<{ code: string; verifier: string }> {
+  authorize(p: SignInParams): Promise<{ code: string; verifier: string }> {
+    const run = this.queue.then(() => this.authorizeNow(p));
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
+  private async authorizeNow(p: SignInParams): Promise<{ code: string; verifier: string }> {
     const { verifier, challenge } = pkcePair();
+    const state = randomBytes(16).toString('base64url');
+    const user = p.username.toLowerCase();
     const authority = p.authority.replace(/\/+$/, '');
     const q = new URLSearchParams({
       client_id: p.resource.clientId,
@@ -124,8 +141,9 @@ export class SignInBrowser {
       scope: p.resource.scopes.join(' '),
       code_challenge: challenge,
       code_challenge_method: 'S256',
+      state,
     });
-    if (!this.signedIn) q.set('prompt', 'select_account');
+    if (!this.signedIn.has(user)) q.set('prompt', 'select_account');
     q.set('login_hint', p.username);
     const url = `${authority}/${encodeURIComponent(p.tenant)}/oauth2/v2.0/authorize?${q}`;
 
@@ -134,6 +152,7 @@ export class SignInBrowser {
     const capture = (u: string) => {
       if (outcome || !isRedirect(u)) return;
       const sp = new URL(u).searchParams;
+      if (sp.get('state') !== state) { outcome = { category: 'page_changed' }; return; }
       const err = sp.get('error');
       const code = sp.get('code');
       outcome = err || !code ? { category: mapAuthError(err ?? '', sp.get('error_description') ?? '') } : { code };
@@ -150,7 +169,7 @@ export class SignInBrowser {
     try {
       const result = await this.drive(page, url, new URL(authority).host, p, () => outcome);
       if ('category' in result) throw new SignInError(result.category);
-      this.signedIn = true;
+      this.signedIn.add(user);
       return { code: result.code, verifier };
     } catch (e) {
       // Playwright errors can quote selectors or page content: never pass them through.
@@ -206,10 +225,12 @@ export class SignInBrowser {
           await page.locator(SEL.next).first().click();
           break;
         case 'password':
+          if (!onAuthority(page, authorityHost)) return { category: 'federated' };
           await page.locator(SEL.passwd).first().fill(p.password);
           await page.locator(SEL.next).first().click();
           break;
         case 'otc':
+          if (!onAuthority(page, authorityHost)) return { category: 'federated' };
           await page.locator(SEL.otc).first().fill(totp(p.totpSeed));
           await page.locator(SEL.otcSubmit).first().click();
           break;
