@@ -25,7 +25,7 @@ export const defaultPsRunner: PsScriptRunner = (scriptPath, stdin) =>
     child.stdout.on('data', (d: Buffer) => out.push(d));
     child.stderr.on('data', () => {}); // drain; never surfaced
     child.stdin.on('error', () => {}); // child may exit before reading
-    child.on('error', reject);
+    child.on('error', () => resolve({ code: -1, stdout: '' })); // cannot spawn powershell.exe
     child.on('close', (code) =>
       resolve({ code: code ?? -1, stdout: Buffer.concat(out).toString('utf8') }),
     );
@@ -36,14 +36,25 @@ function scriptPath(name: string): string {
   return fileURLToPath(new URL(`./${name}`, import.meta.url));
 }
 
+async function safeRun(run: PsScriptRunner, path: string, stdin: string): Promise<{ code: number; stdout: string }> {
+  try {
+    return await run(path, stdin);
+  } catch {
+    return { code: -1, stdout: '' };
+  }
+}
+
 function warn(code: number): void {
   process.stderr.write(`dialog script exited with unexpected code ${code}\n`);
 }
 
 /** Returns the password, or null if cancelled or the dialog failed. */
 export async function promptPassword(run: PsScriptRunner = defaultPsRunner): Promise<string | null> {
-  const { code, stdout } = await run(scriptPath('password.ps1'), '');
-  if (code === 0) return stdout.replace(/[\r\n]+$/, '');
+  const { code, stdout } = await safeRun(run, scriptPath('password.ps1'), '');
+  if (code === 0) {
+    const pw = stdout.replace(/[\r\n]+$/, '');
+    return pw === '' ? null : pw;
+  }
   if (code !== 1) warn(code);
   return null;
 }
@@ -53,7 +64,7 @@ export async function confirmAction(
   req: ApprovalRequest,
   run: PsScriptRunner = defaultPsRunner,
 ): Promise<boolean> {
-  const { code } = await run(scriptPath('confirm.ps1'), JSON.stringify(req));
+  const { code } = await safeRun(run, scriptPath('confirm.ps1'), JSON.stringify(req));
   if (code === 0) return true;
   if (code !== 1) warn(code);
   return false;

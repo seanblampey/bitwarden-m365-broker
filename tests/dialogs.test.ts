@@ -16,6 +16,9 @@ describe('confirmAction', () => {
   it('exit 1 -> false', async () => {
     expect(await confirmAction(req, async () => ({ code: 1, stdout: '' }))).toBe(false);
   });
+  it('runner rejection -> false', async () => {
+    expect(await confirmAction(req, async () => { throw new Error('spawn'); })).toBe(false);
+  });
   it('unexpected exit code -> false', async () => {
     expect(await confirmAction(req, async () => ({ code: 5, stdout: '' }))).toBe(false);
   });
@@ -27,6 +30,12 @@ describe('promptPassword', () => {
   });
   it('exit 0 -> stdout with trailing CR/LF trimmed', async () => {
     expect(await promptPassword(async () => ({ code: 0, stdout: 'p w\r\n' }))).toBe('p w');
+  });
+  it('empty password -> null', async () => {
+    expect(await promptPassword(async () => ({ code: 0, stdout: '\r\n' }))).toBeNull();
+  });
+  it('runner rejection -> null', async () => {
+    expect(await promptPassword(async () => { throw new Error('spawn'); })).toBeNull();
   });
   it('unexpected exit code -> null', async () => {
     expect(await promptPassword(async () => ({ code: 9, stdout: 'x' }))).toBeNull();
