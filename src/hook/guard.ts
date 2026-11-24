@@ -4,6 +4,8 @@ export interface GuardEnv {
   userProfile: string;
   pluginRoot: string;
   projectDir: string;
+  /** Pi only: Pi's config directory (default ~/.pi/agent). Set when the guard runs inside Pi. */
+  piAgentDir?: string;
 }
 
 export type Decision = { allow: true } | { allow: false; reason: string };
@@ -15,6 +17,8 @@ const PATH_KEYS = ['file_path', 'path', 'notebook_path'];
 
 /** `.claude` as a directory name (not `.claude-plugin`), in any spelling of its parent. */
 const CLAUDE_DIR = /\.claude(?![\w-])/i;
+/** `.pi` as a path segment, as in ~/.pi/agent or a project's .pi folder. */
+const PI_DIR = /(^|[\s'"`=:(\\/])\.pi(?=[\\/\s'"`)]|$)/i;
 const BW_WORD = /(^|[\s;&|(`'"/\\])bw(\.exe|\.cmd|\.ps1)?(?=$|[\s;&|)`'"])/i;
 const UI_AUTOMATION =
   /SendKeys|UIAutomation|System\.Windows\.Automation|AutoHotkey|\bahk\b|wscript|cscript|nircmd|mouse_event|SetCursorPos/i;
@@ -51,6 +55,9 @@ function protectedPaths(env: GuardEnv): { all: string[]; plugin: string } {
     [env.userProfile, '\\.claude\\settings.local.json'],
     [env.projectDir, '\\.claude\\settings.json'],
     [env.projectDir, '\\.claude\\settings.local.json'],
+    // Pi: its settings, extensions, packages and mcp.json; a project's .pi folder
+    [env.piAgentDir ?? '', ''],
+    [env.piAgentDir ? env.projectDir : '', '\\.pi'],
   ];
   const all = entries.filter(([base]) => !!base).map(([base, suffix]) => normalizePath(base + suffix));
   return { all, plugin: env.pluginRoot ? normalizePath(env.pluginRoot) : '' };
@@ -98,8 +105,8 @@ export function decide(toolName: string, toolInput: Record<string, unknown>, env
     const searchTool = toolName === 'Grep' || toolName === 'Glob';
     const proj = env.projectDir ? normalizePath(env.projectDir) : '';
     // ancestor check: a search rooted above a protected root would read it.
-    // Plugin root (readable) and project-level settings (always inside projectDir) are excluded.
-    const ancestorRoots = all.filter((r) => r !== plugin && !(proj && r.startsWith(proj + '/.claude/')));
+    // Plugin root (readable) and project-level settings (.claude, Pi's .pi; always inside projectDir) are excluded.
+    const ancestorRoots = all.filter((r) => r !== plugin && !(proj && (r.startsWith(proj + '/.claude/') || r === proj + '/.pi')));
     const hasPath = PATH_KEYS.some((k) => toolInput[k] !== undefined);
     if (searchTool && !hasPath && env.projectDir) targets.push(env.projectDir);
     for (const t of targets) {
@@ -110,7 +117,7 @@ export function decide(toolName: string, toolInput: Record<string, unknown>, env
       const protectedHit = !pluginRead && all.some((r) => isInside(p, r));
       const ancestorHit = searchTool && ancestorRoots.some((r) => isInside(r, p));
       if (protectedHit || ancestorHit) {
-        return deny('Blocked: this path holds Bitwarden data, broker config/code/audit log, Claude settings or Claude plugins and is off limits to Claude.');
+        return deny('Blocked: this path holds Bitwarden data, broker config/code/audit log, or the agent\'s own settings, plugins or extensions, and is off limits to the AI assistant.');
       }
     }
     return { allow: true };
@@ -126,6 +133,9 @@ export function decide(toolName: string, toolInput: Record<string, unknown>, env
     // .claude directory together with settings or plugins is denied. A few false denials are accepted.
     if (CLAUDE_DIR.test(command) && /settings|plugins/i.test(command)) {
       return deny('Blocked: command references Claude settings or plugin files.');
+    }
+    if (env.piAgentDir && PI_DIR.test(command)) {
+      return deny('Blocked: command references Pi settings, extensions or packages.');
     }
     const variants = normalizeCommand(command, env);
     if (variants.some((v) => v.includes('.claude/settings.json') || v.includes('.claude/settings.local.json'))) {

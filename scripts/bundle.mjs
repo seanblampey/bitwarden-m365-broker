@@ -2,7 +2,8 @@
 // GitHub install, with no `npm install` or build step on the user's machine.
 //   dist/server.js        MCP server (dependencies inlined, except playwright-core)
 //   dist/node_modules/playwright-core  shipped as-is: it reads its own files at runtime
-//   dist/hook/main.js     PreToolUse guard hook
+//   dist/hook/main.js     PreToolUse guard hook (Claude Code)
+//   dist/pi/extension.js  Pi extension: registers the broker and guards tool calls
 //   dist/win/*.ps1, dist/exo/*.ps1  PowerShell helpers
 import { build } from 'esbuild';
 import { rmSync, cpSync } from 'node:fs';
@@ -38,5 +39,6 @@ cpSync(join(root, 'node_modules/playwright-core'), join(dist, 'node_modules/play
   filter: (src) => !src.includes(`${'playwright-core'}/types`) && !src.endsWith('.d.ts'),
 });
 await build({ ...common, entryPoints: [join(root, 'src/hook/main.ts')], outfile: join(dist, 'hook/main.js') });
+await build({ ...common, entryPoints: [join(root, 'src/pi/extension.ts')], outfile: join(dist, 'pi/extension.js') });
 
 await import('./copy-assets.mjs');

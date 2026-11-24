@@ -42,7 +42,10 @@ function protectedPaths(env) {
     [env.userProfile, "\\.claude\\settings.json"],
     [env.userProfile, "\\.claude\\settings.local.json"],
     [env.projectDir, "\\.claude\\settings.json"],
-    [env.projectDir, "\\.claude\\settings.local.json"]
+    [env.projectDir, "\\.claude\\settings.local.json"],
+    // Pi: its settings, extensions, packages and mcp.json; a project's .pi folder
+    [env.piAgentDir ?? "", ""],
+    [env.piAgentDir ? env.projectDir : "", "\\.pi"]
   ];
   const all = entries.filter(([base]) => !!base).map(([base, suffix]) => normalizePath(base + suffix));
   return { all, plugin: env.pluginRoot ? normalizePath(env.pluginRoot) : "" };
@@ -81,7 +84,7 @@ function decide(toolName, toolInput, env) {
     }
     const searchTool = toolName === "Grep" || toolName === "Glob";
     const proj = env.projectDir ? normalizePath(env.projectDir) : "";
-    const ancestorRoots = all.filter((r) => r !== plugin && !(proj && r.startsWith(proj + "/.claude/")));
+    const ancestorRoots = all.filter((r) => r !== plugin && !(proj && (r.startsWith(proj + "/.claude/") || r === proj + "/.pi")));
     const hasPath = PATH_KEYS.some((k) => toolInput[k] !== void 0);
     if (searchTool && !hasPath && env.projectDir) targets.push(env.projectDir);
     for (const t of targets) {
@@ -91,7 +94,7 @@ function decide(toolName, toolInput, env) {
       const protectedHit = !pluginRead && all.some((r) => isInside(p, r));
       const ancestorHit = searchTool && ancestorRoots.some((r) => isInside(r, p));
       if (protectedHit || ancestorHit) {
-        return deny("Blocked: this path holds Bitwarden data, broker config/code/audit log, Claude settings or Claude plugins and is off limits to Claude.");
+        return deny("Blocked: this path holds Bitwarden data, broker config/code/audit log, or the agent's own settings, plugins or extensions, and is off limits to the AI assistant.");
       }
     }
     return { allow: true };
@@ -105,6 +108,9 @@ function decide(toolName, toolInput, env) {
     if (CLAUDE_DIR.test(command) && /settings|plugins/i.test(command)) {
       return deny("Blocked: command references Claude settings or plugin files.");
     }
+    if (env.piAgentDir && PI_DIR.test(command)) {
+      return deny("Blocked: command references Pi settings, extensions or packages.");
+    }
     const variants = normalizeCommand(command, env);
     if (variants.some((v) => v.includes(".claude/settings.json") || v.includes(".claude/settings.local.json"))) {
       return deny("Blocked: command references Claude settings files.");
@@ -116,7 +122,7 @@ function decide(toolName, toolInput, env) {
   }
   return { allow: true };
 }
-var FILE_TOOLS, READ_ONLY_TOOLS, SHELL_TOOLS, PATH_KEYS, CLAUDE_DIR, BW_WORD, UI_AUTOMATION, deny;
+var FILE_TOOLS, READ_ONLY_TOOLS, SHELL_TOOLS, PATH_KEYS, CLAUDE_DIR, PI_DIR, BW_WORD, UI_AUTOMATION, deny;
 var init_guard = __esm({
   "src/hook/guard.ts"() {
     "use strict";
@@ -125,6 +131,7 @@ var init_guard = __esm({
     SHELL_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
     PATH_KEYS = ["file_path", "path", "notebook_path"];
     CLAUDE_DIR = /\.claude(?![\w-])/i;
+    PI_DIR = /(^|[\s'"`=:(\\/])\.pi(?=[\\/\s'"`)]|$)/i;
     BW_WORD = /(^|[\s;&|(`'"/\\])bw(\.exe|\.cmd|\.ps1)?(?=$|[\s;&|)`'"])/i;
     UI_AUTOMATION = /SendKeys|UIAutomation|System\.Windows\.Automation|AutoHotkey|\bahk\b|wscript|cscript|nircmd|mouse_event|SetCursorPos/i;
     deny = (reason) => ({ allow: false, reason });
