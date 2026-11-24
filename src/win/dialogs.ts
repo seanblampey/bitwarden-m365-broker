@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { assetPath } from '../assets.js';
 import { BrokerError } from '../errors.js';
 
 export interface ApprovalRequest {
@@ -63,7 +63,7 @@ export const defaultPsRunner: PsScriptRunner = createPsRunner({
 });
 
 function scriptPath(name: string): string {
-  return fileURLToPath(new URL(`./${name}`, import.meta.url));
+  return assetPath(`win/${name}`);
 }
 
 export type DialogOutcome =

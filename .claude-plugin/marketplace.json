@@ -1,6 +1,8 @@
 {
-  "name": "bitwarden-m365-local",
-  "owner": { "name": "local" },
+  "name": "bitwarden-m365",
+  "owner": {
+    "name": "local"
+  },
   "plugins": [
     {
       "name": "bitwarden-m365",

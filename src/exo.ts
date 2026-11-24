@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { assetPath } from './assets.js';
 import { BrokerError } from './errors.js';
 import { validateCmdlet, validateParameters } from './classify.js';
 import { Redactor } from './redact.js';
@@ -18,7 +18,7 @@ const TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_ERROR = 1000;
 
 export function defaultPsRunner(): PsRunner {
-  const script = fileURLToPath(new URL('./exo/run-cmdlet.ps1', import.meta.url));
+  const script = assetPath('exo/run-cmdlet.ps1');
   return (stdin) =>
     new Promise((resolve, reject) => {
       const child = spawn(
