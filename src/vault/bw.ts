@@ -17,6 +17,8 @@ export interface BwItem {
 }
 
 const MAX_ERROR_LENGTH = 500;
+const TIMEOUT_MS = 60_000;
+const NO_INTERACTION = '--nointeraction';
 const UNEXPECTED = 'Bitwarden CLI returned unexpected output.';
 
 /** Finds bw.exe, then bw.cmd, on PATH (Windows only). */
@@ -40,7 +42,12 @@ export const nodeRunner: Runner = (args, env) =>
     const fullEnv = { ...process.env, ...env };
     let command = 'bw';
     let spawnArgs = args;
-    const options: Parameters<typeof spawn>[2] = { env: fullEnv, shell: false, windowsHide: true };
+    const options: Parameters<typeof spawn>[2] = {
+      env: fullEnv,
+      shell: false,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    };
     if (process.platform === 'win32') {
       const resolved = resolveWindowsBw(fullEnv);
       if (resolved) command = resolved;
@@ -56,14 +63,22 @@ export const nodeRunner: Runner = (args, env) =>
     let stderr = '';
     child.stdout?.setEncoding('utf8').on('data', (d: string) => (stdout += d));
     child.stderr?.setEncoding('utf8').on('data', (d: string) => (stderr += d));
-    child.on('error', (e: NodeJS.ErrnoException) =>
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new BrokerError('bw_failed', 'Bitwarden CLI timed out.'));
+    }, TIMEOUT_MS);
+    child.on('error', (e: NodeJS.ErrnoException) => {
+      clearTimeout(timer);
       reject(
         e.code === 'ENOENT'
           ? new BrokerError('bw_not_found', 'Bitwarden CLI (bw) was not found on PATH.')
           : new BrokerError('bw_failed', 'Could not start the Bitwarden CLI.'),
-      ),
-    );
-    child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }));
+      );
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
   });
 
 export class BwClient {
@@ -78,7 +93,7 @@ export class BwClient {
   }
 
   async unlock(masterPassword: string): Promise<string> {
-    const r = await this.run(['unlock', '--passwordenv', 'BW_BROKER_MASTER', '--raw'], {
+    const r = await this.run(['unlock', '--passwordenv', 'BW_BROKER_MASTER', '--raw', NO_INTERACTION], {
       BW_BROKER_MASTER: masterPassword,
     });
     if (r.code !== 0) {
@@ -119,7 +134,7 @@ export class BwClient {
   }
 
   private async exec(args: string[], env: Record<string, string>, secrets: string[]) {
-    const r = await this.run(args, env);
+    const r = await this.run([...args, NO_INTERACTION], env);
     if (r.code !== 0) throw failure(r.stderr, secrets);
     return r;
   }

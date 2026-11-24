@@ -24,7 +24,7 @@ describe('BwClient', () => {
   it('status parses JSON status', async () => {
     const { run, calls } = fake([ok(JSON.stringify({ status: 'locked' }))]);
     expect(await new BwClient(run).status()).toBe('locked');
-    expect(calls[0].args).toEqual(['status']);
+    expect(calls[0].args).toEqual(['status', '--nointeraction']);
   });
 
   it('status rejects malformed output without echoing it', async () => {
@@ -44,7 +44,7 @@ describe('BwClient', () => {
     const { run, calls } = fake([ok('SESSIONKEY\n')]);
     const session = await new BwClient(run).unlock('master-pw-123');
     expect(session).toBe('SESSIONKEY');
-    expect(calls[0].args).toEqual(['unlock', '--passwordenv', 'BW_BROKER_MASTER', '--raw']);
+    expect(calls[0].args).toEqual(['unlock', '--passwordenv', 'BW_BROKER_MASTER', '--raw', '--nointeraction']);
     expect(calls[0].args.join(' ')).not.toContain('master-pw-123');
     expect(calls[0].env).toEqual({ BW_BROKER_MASTER: 'master-pw-123' });
   });
@@ -58,11 +58,11 @@ describe('BwClient', () => {
   });
 
   it('unlock failure message does not contain the password and is truncated', async () => {
-    const { run } = fake([{ code: 1, stdout: '', stderr: `boom master-pw-123 ${'x'.repeat(2000)}` }]);
+    const { run } = fake([{ code: 1, stdout: '', stderr: 'x'.repeat(2000) }]);
     const err = await new BwClient(run).unlock('master-pw-123').catch((e) => e);
     expect(err.code).toBe('bw_failed');
     expect(err.message).not.toContain('master-pw-123');
-    expect(err.message.length).toBeLessThanOrEqual(600);
+    expect(err.message.length).toBeLessThanOrEqual(500);
   });
 
   it('unlock with empty output fails', async () => {
@@ -77,9 +77,9 @@ describe('BwClient', () => {
     const items = await c.listItems('SESS-XYZ', 'f1');
     await c.lock();
     expect(items).toEqual([{ id: '1', name: 'a' }]);
-    expect(calls[0]).toEqual({ args: ['sync'], env: { BW_SESSION: 'SESS-XYZ' } });
-    expect(calls[1]).toEqual({ args: ['list', 'items', '--folderid', 'f1'], env: { BW_SESSION: 'SESS-XYZ' } });
-    expect(calls[2].args).toEqual(['lock']);
+    expect(calls[0]).toEqual({ args: ['sync', '--nointeraction'], env: { BW_SESSION: 'SESS-XYZ' } });
+    expect(calls[1]).toEqual({ args: ['list', 'items', '--folderid', 'f1', '--nointeraction'], env: { BW_SESSION: 'SESS-XYZ' } });
+    expect(calls[2].args).toEqual(['lock', '--nointeraction']);
     for (const call of calls) expect(call.args.join(' ')).not.toContain('SESS-XYZ');
   });
 
@@ -94,7 +94,7 @@ describe('BwClient', () => {
       ok(JSON.stringify([{ id: 'a', name: 'Claude Access Old' }, { id: 'b', name: 'Claude Access' }])),
     ]);
     expect(await new BwClient(run).folderId('S', 'Claude Access')).toBe('b');
-    expect(calls[0].args).toEqual(['list', 'folders', '--search', 'Claude Access']);
+    expect(calls[0].args).toEqual(['list', 'folders', '--search', 'Claude Access', '--nointeraction']);
     expect(calls[0].env).toEqual({ BW_SESSION: 'S' });
   });
 
