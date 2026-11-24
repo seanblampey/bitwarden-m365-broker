@@ -1,10 +1,20 @@
 {
   "name": "bitwarden-m365-broker",
-  "version": "0.3.1",
-  "private": true,
+  "version": "0.4.0",
+  "keywords": [
+    "pi-package",
+    "claude-code-plugin",
+    "bitwarden",
+    "microsoft-365"
+  ],
   "type": "module",
-  "engines": {
-    "node": ">=20"
+  "pi": {
+    "extensions": [
+      "./dist/pi/extension.js"
+    ],
+    "skills": [
+      "./skills"
+    ]
   },
   "scripts": {
     "build": "node scripts/bundle.mjs",
@@ -12,17 +22,19 @@
     "check:dist": "npm run build && git diff --exit-code -- dist",
     "test": "vitest run"
   },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.2",
-    "otpauth": "^9.6.0",
-    "playwright-core": "^1.65.1",
-    "zod": "^4.6.7"
-  },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/node": "^26.6.6",
     "esbuild": "^0.25.10",
+    "otpauth": "^9.6.0",
+    "playwright-core": "^1.65.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.1.1"
+    "vitest": "^5.1.1",
+    "zod": "^4.6.7"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=20"
   }
 }
