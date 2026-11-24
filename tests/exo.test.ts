@@ -30,6 +30,20 @@ describe('runCmdlet', () => {
     expect(e.message).not.toContain('SECRETTOKEN123');
     expect(e.message.length).toBeLessThanOrEqual(1000);
   });
+  it('scrubs a JWT straddling the truncation point', async () => {
+    const jwt = 'eyJhbGciOi.abcdefghijklmnop.sig123456';
+    const err = 'a'.repeat(990) + jwt;
+    const e = await runCmdlet(runner(JSON.stringify({ ok: false, error: err })), base).catch((x) => x);
+    expect(e.message).not.toContain('eyJ');
+    expect(e.message.length).toBeLessThanOrEqual(1000);
+  });
+  it('rejects caller-supplied common parameters before running', async () => {
+    const r = runner('{}');
+    for (const k of ['ErrorAction', 'errorvariable', 'WarningAction', 'WarningVariable', 'InformationAction', 'InformationVariable', 'OutVariable', 'OutBuffer', 'PipelineVariable']) {
+      await expect(runCmdlet(r, { ...base, parameters: { [k]: 'x' } })).rejects.toMatchObject({ code: 'invalid_parameters' });
+    }
+    expect(r).not.toHaveBeenCalled();
+  });
   it('maps garbage output / crashes to a generic error without stderr', async () => {
     for (const r of [runner('not json'), runner('', 1), (async () => { throw new Error('x'); }) as PsRunner]) {
       await expect(runCmdlet(r, base)).rejects.toMatchObject({ code: 'exo_failed', message: 'Exchange Online PowerShell failed unexpectedly.' });
@@ -45,6 +59,8 @@ describe('run-cmdlet.ps1', () => {
     expect(src).toContain('Get-Command');
     expect(src).toContain('ExchangeOnlineManagement');
     expect(src).toContain('Disconnect-ExchangeOnline');
+    expect(src).toContain("$params['ErrorAction'] = 'Stop'");
+    expect(src).toContain("[version]'3.1.0'");
   });
   const hasPwsh = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major']).status === 0;
   it.skipIf(!hasPwsh)('refuses Get-Content via a stub module', () => {

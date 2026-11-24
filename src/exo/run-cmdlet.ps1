@@ -4,9 +4,6 @@ $ProgressPreference = 'SilentlyContinue'
 $InformationPreference = 'SilentlyContinue'
 $WarningPreference = 'SilentlyContinue'
 $VerbosePreference = 'SilentlyContinue'
-[Console]::InputEncoding = [System.Text.Encoding]::UTF8
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 function ConvertTo-Param($v) {
     if ($null -eq $v) { return $null }
@@ -19,14 +16,17 @@ function ConvertTo-Param($v) {
         $items = @($v | ForEach-Object { ConvertTo-Param $_ })
         $allStrings = $true
         foreach ($i in $items) { if ($i -isnot [string]) { $allStrings = $false } }
-        if ($allStrings) { return [string[]]$items }
-        return [object[]]$items
+        if ($allStrings) { return ,([string[]]$items) }
+        return ,$items
     }
     return $v
 }
 
 $envelope = $null
 try {
+    [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
     $raw = [Console]::In.ReadToEnd()
     $req = $raw | ConvertFrom-Json
     $name = [string]$req.cmdlet
@@ -37,7 +37,12 @@ try {
         throw 'ExchangeOnlineManagement module not installed. Run: Install-Module ExchangeOnlineManagement -Scope CurrentUser'
     }
 
-    Connect-ExchangeOnline -AccessToken ([string]$req.token) -UserPrincipalName ([string]$req.upn) -Organization ([string]$req.organization) -ShowBanner:$false | Out-Null
+    $mod = Get-Module ExchangeOnlineManagement | Sort-Object Version -Descending | Select-Object -First 1
+    if ($null -eq $mod -or $mod.Version -lt [version]'3.1.0') {
+        throw 'ExchangeOnlineManagement 3.1.0 or later is required. Run: Update-Module ExchangeOnlineManagement'
+    }
+
+    Connect-ExchangeOnline -AccessToken ([string]$req.token) -UserPrincipalName ([string]$req.upn) -Organization ([string]$req.organization) -ShowBanner:$false -ErrorAction Stop 6>$null | Out-Null
 
     # Module-origin check: only Exchange Online cmdlets may run (refuses Get-Content, Get-ChildItem, Get-Process, ...).
     $cmd = Get-Command -Name $name -CommandType Cmdlet,Function -ErrorAction Stop
@@ -52,6 +57,8 @@ try {
                 $params[$p.Name] = ConvertTo-Param $p.Value
             }
         }
+        # $ErrorActionPreference does not reach module functions; force it per call.
+        $params['ErrorAction'] = 'Stop'
         $result = & $cmd @params 3>$null 4>$null 5>$null 6>$null
         $envelope = @{ ok = $true; result = $result }
     }

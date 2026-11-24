@@ -64,9 +64,19 @@ function parseEnvelope(stdout: string): { ok: boolean; result?: unknown; error?:
   return undefined;
 }
 
+const FORBIDDEN_COMMON = new Set([
+  'erroraction', 'errorvariable', 'warningaction', 'warningvariable', 'informationaction',
+  'informationvariable', 'outvariable', 'outbuffer', 'pipelinevariable',
+]);
+
 export async function runCmdlet(run: PsRunner, args: CmdletArgs): Promise<unknown> {
   validateCmdlet(args.cmdlet);
   const parameters = validateParameters(args.parameters);
+  for (const k of Object.keys(parameters)) {
+    if (FORBIDDEN_COMMON.has(k.toLowerCase())) {
+      throw new BrokerError('invalid_parameters', `Invalid parameters: ${k} is not allowed`);
+    }
+  }
   let out: { code: number; stdout: string; stderr: string };
   try {
     out = await run(JSON.stringify({ ...args, parameters }));
@@ -79,7 +89,7 @@ export async function runCmdlet(run: PsRunner, args: CmdletArgs): Promise<unknow
     const redactor = new Redactor();
     redactor.add(args.token);
     const text = typeof env.error === 'string' && env.error ? env.error : 'Exchange Online command failed.';
-    throw new BrokerError('exo_failed', redactor.scrub(text.slice(0, MAX_ERROR)));
+    throw new BrokerError('exo_failed', redactor.scrub(text).slice(0, MAX_ERROR));
   }
   return env.result ?? null;
 }
