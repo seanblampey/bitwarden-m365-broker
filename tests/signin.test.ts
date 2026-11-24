@@ -166,6 +166,26 @@ describe('SignInBrowser.authorize', () => {
     expect((await category(browser.authorize(params()))).category).toBe('mfa_setup_required');
   });
 
+  it('needs_consent tells the reader exactly how to grant consent for this tenant', async () => {
+    const { browser, params } = await setup({ consentHeading: true });
+    const graph = { ...params(), resource: { key: 'graph' as const, clientId: '14d82eec-204b-4c2f-b7e8-296a70dab67e', redirectUri: 'http://localhost', scopes: ['https://graph.microsoft.com/User.ReadWrite.All', 'https://graph.microsoft.com/Group.ReadWrite.All', 'offline_access'] } };
+    const err = await category(browser.authorize(graph));
+    expect(err.category).toBe('needs_consent');
+    expect(err.message).toContain('/contoso.com/v2.0/adminconsent?client_id=14d82eec-204b-4c2f-b7e8-296a70dab67e');
+    expect(err.message).toContain('scope=https%3A%2F%2Fgraph.microsoft.com%2FUser.ReadWrite.All+https%3A%2F%2Fgraph.microsoft.com%2FGroup.ReadWrite.All&');
+    expect(err.message).toContain('Connect-MgGraph -TenantId contoso.com -Scopes "User.ReadWrite.All","Group.ReadWrite.All"');
+    expect(err.message).not.toContain('offline_access');
+    expect(err.message).toContain('Consent on behalf of your organization');
+  });
+
+  it('needs_consent for Exchange points to Connect-ExchangeOnline', async () => {
+    const { browser, params } = await setup({ consentHeading: true });
+    const err = await category(browser.authorize({ ...params(), resource: EXO_RESOURCE }));
+    expect(err.category).toBe('needs_consent');
+    expect(err.message).toContain('Connect-ExchangeOnline');
+    expect(err.message).not.toContain('adminconsent');
+  });
+
   it('recognises a consent page by its heading and never accepts it', async () => {
     const { site, browser, params } = await setup({ consentHeading: true });
     expect((await category(browser.authorize(params()))).category).toBe('needs_consent');

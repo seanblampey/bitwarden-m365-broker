@@ -24,12 +24,41 @@ export class SignInError extends BrokerError {
   category: SignInCategory;
   /** Where sign-in stopped (page address without query, title, heading, AADSTS code); never field values. */
   detail?: string;
-  constructor(category: SignInCategory, detail?: string) {
-    super('signin_failed', detail ? `${MESSAGES[category]} Stopped at: ${detail}` : MESSAGES[category]);
+  /** What the person should do about it (e.g. how to grant consent for this tenant). */
+  help?: string;
+  constructor(category: SignInCategory, detail?: string, help?: string) {
+    super('signin_failed', [MESSAGES[category], help, detail && `Stopped at: ${detail}`].filter(Boolean).join(' '));
     this.name = 'SignInError';
     this.category = category;
     this.detail = detail;
+    this.help = help;
   }
+}
+
+const GRAPH_PREFIX = 'https://graph.microsoft.com/';
+
+/**
+ * Steps for an administrator to grant consent once in this tenant, so the message tells
+ * whoever reads it exactly what to do. Never includes the account name or any secret.
+ */
+export function consentHelp(authority: string, tenant: string, resource: Resource): string {
+  if (resource.key === 'exo') {
+    return `To fix it for tenant ${tenant}: open Windows PowerShell yourself (not through Claude), run Connect-ExchangeOnline, `
+      + 'sign in as that tenant\'s admin and accept the prompt. Then run connect again.';
+  }
+  const graphScopes = resource.scopes.filter((x) => x.startsWith(GRAPH_PREFIX));
+  const short = graphScopes.map((x) => x.slice(GRAPH_PREFIX.length));
+  const link = `${authority.replace(/\/+$/, '')}/${encodeURIComponent(tenant)}/v2.0/adminconsent?${new URLSearchParams({
+    client_id: resource.clientId,
+    scope: graphScopes.join(' '),
+    redirect_uri: resource.redirectUri,
+  })}`;
+  return `To fix it for tenant ${tenant} (once per tenant), do ONE of these yourself, signed in as that tenant's admin: `
+    + `(1) open this link in your browser and click Accept: ${link} `
+    + '(afterwards the browser shows a "can\'t reach localhost" page; that is expected and consent is done); '
+    + `(2) in Windows PowerShell run: Connect-MgGraph -TenantId ${tenant} -Scopes ${short.map((x) => `"${x}"`).join(',')} `
+    + 'and tick "Consent on behalf of your organization" before accepting. '
+    + 'Then run connect again.';
 }
 
 export interface SignInParams {
@@ -228,7 +257,10 @@ export class SignInBrowser {
     const page = await context.newPage();
     try {
       const result = await this.drive(page, url, new URL(authority).host, p, () => outcome);
-      if ('category' in result) throw new SignInError(result.category, result.detail);
+      if ('category' in result) {
+        const help = result.category === 'needs_consent' ? consentHelp(authority, p.tenant, p.resource) : undefined;
+        throw new SignInError(result.category, result.detail, help);
+      }
       this.signedIn.add(user);
       return { code: result.code, verifier };
     } catch (e) {
