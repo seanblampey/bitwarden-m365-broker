@@ -13,6 +13,8 @@ const READ_ONLY_TOOLS = new Set(['Read', 'Grep', 'Glob']);
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 const PATH_KEYS = ['file_path', 'path', 'notebook_path'];
 
+/** `.claude` as a directory name (not `.claude-plugin`), in any spelling of its parent. */
+const CLAUDE_DIR = /\.claude(?![\w-])/i;
 const BW_WORD = /(^|[\s;&|(`'"/\\])bw(\.exe|\.cmd|\.ps1)?(?=$|[\s;&|)`'"])/i;
 const UI_AUTOMATION =
   /SendKeys|UIAutomation|System\.Windows\.Automation|AutoHotkey|\bahk\b|wscript|cscript|nircmd|mouse_event|SetCursorPos/i;
@@ -42,7 +44,9 @@ function protectedPaths(env: GuardEnv): { all: string[]; plugin: string } {
     [env.appData, '\\Bitwarden CLI'],
     [env.appData, '\\Bitwarden'],
     [env.appData, '\\claude-bw-broker'],
+    [env.localAppData, '\\claude-bw-broker'],
     [env.pluginRoot, ''],
+    [env.userProfile, '\\.claude\\plugins'],
     [env.userProfile, '\\.claude\\settings.json'],
     [env.userProfile, '\\.claude\\settings.local.json'],
     [env.projectDir, '\\.claude\\settings.json'],
@@ -101,10 +105,12 @@ export function decide(toolName: string, toolInput: Record<string, unknown>, env
     for (const t of targets) {
       const raw = /^([a-z]:)?[\\/]/i.test(t) || t.startsWith('~') ? t : `${env.projectDir}\\${t}`;
       const p = normalizePath(t.startsWith('~') ? env.userProfile + t.slice(1) : raw);
-      const protectedHit = all.some((r) => isInside(p, r) && !(READ_ONLY_TOOLS.has(toolName) && r === plugin));
+      // Read-only tools may look inside the plugin's own install directory (even though it sits under ~/.claude/plugins).
+      const pluginRead = READ_ONLY_TOOLS.has(toolName) && !!plugin && isInside(p, plugin);
+      const protectedHit = !pluginRead && all.some((r) => isInside(p, r));
       const ancestorHit = searchTool && ancestorRoots.some((r) => isInside(r, p));
       if (protectedHit || ancestorHit) {
-        return deny('Blocked: this path holds Bitwarden data, broker config/code or Claude settings and is off limits to Claude.');
+        return deny('Blocked: this path holds Bitwarden data, broker config/code/audit log, Claude settings or Claude plugins and is off limits to Claude.');
       }
     }
     return { allow: true };
@@ -116,12 +122,17 @@ export function decide(toolName: string, toolInput: Record<string, unknown>, env
     if (BW_WORD.test(command)) return deny('Blocked: the Bitwarden CLI may not be run directly; use the broker tools.');
     if (/@bitwarden\/cli/i.test(command)) return deny('Blocked: the Bitwarden CLI may not be run directly; use the broker tools.');
     if (UI_AUTOMATION.test(command)) return deny('Blocked: UI automation could answer approval dialogs.');
+    // Split paths (`cd ~/.claude && cat > settings.json`) defeat substring matching, so any mention of the
+    // .claude directory together with settings or plugins is denied. A few false denials are accepted.
+    if (CLAUDE_DIR.test(command) && /settings|plugins/i.test(command)) {
+      return deny('Blocked: command references Claude settings or plugin files.');
+    }
     const variants = normalizeCommand(command, env);
     if (variants.some((v) => v.includes('.claude/settings.json') || v.includes('.claude/settings.local.json'))) {
       return deny('Blocked: command references Claude settings files.');
     }
     if (all.some((r) => variants.some((v) => v.includes(r)))) {
-      return deny('Blocked: command references a protected path (Bitwarden data, broker files or Claude settings).');
+      return deny('Blocked: command references a protected path (Bitwarden data, broker files, audit log, Claude settings or plugins).');
     }
     return { allow: true };
   }

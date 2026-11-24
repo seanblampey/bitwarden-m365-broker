@@ -99,6 +99,41 @@ describe('review fixes', () => {
   });
 });
 
+describe('final review fixes', () => {
+  const LOCAL = env.localAppData;
+  it('I1: protects the audit log from file tools and shell commands', () => {
+    expect(allowed('Read', { file_path: `${LOCAL}\\claude-bw-broker\\audit.jsonl` })).toBe(false);
+    expect(allowed('Write', { file_path: 'c:/users/sean/appdata/local/claude-bw-broker/audit.jsonl' })).toBe(false);
+    expect(allowed('Edit', { file_path: `${LOCAL}\\claude-bw-broker\\audit.jsonl` })).toBe(false);
+    expect(allowed('Grep', { path: LOCAL, pattern: 'x' })).toBe(false);
+    expect(allowed('Bash', { command: 'cat $LOCALAPPDATA/claude-bw-broker/audit.jsonl' })).toBe(false);
+    expect(allowed('Bash', { command: 'rm "%LOCALAPPDATA%\\claude-bw-broker\\audit.jsonl"' })).toBe(false);
+    expect(allowed('PowerShell', { command: 'Clear-Content $env:LOCALAPPDATA\\claude-bw-broker\\audit.jsonl' })).toBe(false);
+    expect(allowed('Bash', { command: 'cat ~/AppData/Local/claude-bw-broker/audit.jsonl' })).toBe(false);
+    expect(allowed('Read', { file_path: `${LOCAL}\\Temp\\x.txt` })).toBe(true);
+  });
+  it('I6: protects ~/.claude/plugins but still lets read-only tools look at the plugin itself', () => {
+    expect(allowed('Edit', { file_path: 'C:\\Users\\sean\\.claude\\plugins\\installed_plugins.json' })).toBe(false);
+    expect(allowed('Write', { file_path: 'C:\\Users\\sean\\.claude\\plugins\\known_marketplaces.json' })).toBe(false);
+    expect(allowed('Read', { file_path: '~/.claude/plugins/installed_plugins.json' })).toBe(false);
+    expect(allowed('Write', { file_path: 'C:\\Users\\sean\\.claude\\plugins\\cache\\x\\dist\\server.js' })).toBe(false);
+    expect(allowed('Glob', { path: 'C:\\Users\\sean\\.claude', pattern: '**/*' })).toBe(false);
+    expect(allowed('Read', { file_path: `${env.pluginRoot}\\README.md` })).toBe(true);
+    expect(allowed('Edit', { file_path: `${env.pluginRoot}\\README.md` })).toBe(false);
+  });
+  it('I6: denies shell commands that mention .claude together with settings or plugins', () => {
+    expect(allowed('Bash', { command: 'cd ~/.claude && cat > settings.json' })).toBe(false);
+    expect(allowed('Bash', { command: 'cd ~/.claude/plugins/cache && rm -rf x' })).toBe(false);
+    expect(allowed('Bash', { command: 'cd .claude; echo {} > Settings.local.json' })).toBe(false);
+    expect(allowed('PowerShell', { command: 'Set-Location C:\\Users\\sean\\.CLAUDE; ri -r PLUGINS' })).toBe(false);
+    expect(allowed('Bash', { command: 'cd /c/Users/sean/.claude && ls plugins' })).toBe(false);
+    expect(allowed('PowerShell', { command: 'gc $env:USERPROFILE\\.claude\\plugins\\installed_plugins.json' })).toBe(false);
+    // not the .claude directory, or no settings/plugins mention
+    expect(allowed('Bash', { command: 'cat .claude-plugin/plugin.json' })).toBe(true);
+    expect(allowed('Bash', { command: 'ls ~/.claude/projects' })).toBe(true);
+  });
+});
+
 describe('HOME expansion', () => {
   it('denies $HOME and ${HOME} spellings', () => {
     expect(allowed('Bash', { command: 'cat $HOME/AppData/Roaming/"Bitwarden CLI"/data.json' })).toBe(false);

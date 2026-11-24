@@ -9,7 +9,7 @@ How it keeps secrets away from Claude:
 - Claude only gets six tools: `list_tenants`, `connect`, `graph_request`, `exo_cmdlet`, `disconnect`, `lock`. None of them returns a password, MFA code or token.
 - A small local program (the "broker") unlocks Bitwarden after you type your master password into a Windows dialog, signs in to Microsoft in a hidden Edge window, generates the MFA code itself, and keeps the tokens in memory only.
 - Reads (Graph `GET`, Exchange `Get-` cmdlets) run straight away. Anything else shows a Yes/No dialog, with No pre-selected, and only runs if you click Yes.
-- Every result is scrubbed of anything that looks like a secret. A hook stops Claude from running the `bw` command or opening Bitwarden/broker/settings files.
+- Every result is scrubbed of anything that looks like a secret. A hook stops Claude from running the `bw` command, and from touching (with its file tools or in a shell command) the Bitwarden data folders, the broker's config folder (`%APPDATA%\claude-bw-broker`) and audit log folder (`%LOCALAPPDATA%\claude-bw-broker`), Claude's `settings.json`/`settings.local.json` files (user and project), and `%USERPROFILE%\.claude\plugins` (Claude may still read this plugin's own files). Any shell command that mentions `.claude` together with `settings` or `plugins` is also blocked.
 - Only things in the Bitwarden folder `Claude Access` are usable.
 
 ## Requirements
@@ -63,7 +63,7 @@ Path: `%APPDATA%\claude-bw-broker\config.json`. If it is missing, defaults are u
 
 Example: `{ "idleMinutes": 15 }`
 
-The audit log (what was called, approved or denied; never secrets) is at `%LOCALAPPDATA%\claude-bw-broker\audit.jsonl`.
+The audit log (what was called, approved or denied; never secrets) is at `%LOCALAPPDATA%\claude-bw-broker\audit.jsonl`. Claude is blocked from reading, editing or deleting it.
 
 ## Per-tenant consent
 
