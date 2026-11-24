@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
+import { BrokerError } from '../src/errors.js';
 import { totp, pkcePair } from '../src/crypto.js';
 
 const SEED = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
@@ -17,6 +18,30 @@ describe('totp', () => {
   });
   it('tolerates spaces/lowercase in base32', () => {
     expect(totp('gezd gnbv gy3t qojq gezd gnbv gy3t qojq', 59_000)).toBe('287082');
+  });
+});
+
+describe('totp errors', () => {
+  const fail = (seed: string) => {
+    try {
+      totp(seed, 59_000);
+    } catch (e) {
+      return e as BrokerError;
+    }
+    throw new Error('expected throw');
+  };
+  it('does not leak seed characters', () => {
+    const e = fail('GEZDGNBV!GY3TQ');
+    expect(e).toBeInstanceOf(BrokerError);
+    expect(e.code).toBe('bad_totp_seed');
+    expect(e.message).not.toContain('!');
+    expect(e.message).not.toContain('GEZD');
+  });
+  it('rejects hotp URIs', () => {
+    expect(fail(`otpauth://hotp/x?secret=${SEED}&counter=1`).code).toBe('bad_totp_seed');
+  });
+  it('rejects malformed URIs', () => {
+    expect(fail('otpauth://totp/x?digits=6').code).toBe('bad_totp_seed');
   });
 });
 
