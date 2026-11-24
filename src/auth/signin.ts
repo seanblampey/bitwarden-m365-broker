@@ -6,7 +6,7 @@ import type { Resource } from './resources.js';
 
 export type SignInCategory =
   | 'wrong_password' | 'mfa_not_totp' | 'needs_consent' | 'conditional_access'
-  | 'federated' | 'account_locked' | 'page_changed';
+  | 'federated' | 'account_locked' | 'mfa_setup_required' | 'wrong_tenant' | 'page_changed';
 
 const MESSAGES: Record<SignInCategory, string> = {
   wrong_password: 'Microsoft rejected the password for this account.',
@@ -14,16 +14,21 @@ const MESSAGES: Record<SignInCategory, string> = {
   needs_consent: 'Microsoft asked for consent to the app; an administrator must grant consent first (the broker never accepts consent).',
   conditional_access: 'A Conditional Access policy blocked this sign-in.',
   federated: 'The account signs in through a federated identity provider, which the broker does not support.',
-  account_locked: 'Microsoft reports that the account is locked.',
+  account_locked: 'Microsoft reports that the account is locked or disabled.',
+  mfa_setup_required: 'Microsoft wants this account to set up or update its MFA methods ("More information required"). Sign in once yourself and finish the setup, then try again.',
+  wrong_tenant: 'Microsoft says this account does not exist in that tenant. Check the item\'s username and its tenant field.',
   page_changed: 'The Microsoft sign-in page did not look as expected or did not respond in time.',
 };
 
 export class SignInError extends BrokerError {
   category: SignInCategory;
-  constructor(category: SignInCategory) {
-    super('signin_failed', MESSAGES[category]);
+  /** Where sign-in stopped (page address without query, title, heading, AADSTS code); never field values. */
+  detail?: string;
+  constructor(category: SignInCategory, detail?: string) {
+    super('signin_failed', detail ? `${MESSAGES[category]} Stopped at: ${detail}` : MESSAGES[category]);
     this.name = 'SignInError';
     this.category = category;
+    this.detail = detail;
   }
 }
 
@@ -45,7 +50,7 @@ export interface LaunchOpts {
 }
 
 type State =
-  | 'consent' | 'federated' | 'password_error' | 'kmsi' | 'otc' | 'pick_otp' | 'other_mfa'
+  | 'consent' | 'federated' | 'aad_error' | 'proof_up' | 'password_error' | 'kmsi' | 'otc' | 'pick_otp' | 'other_mfa'
   | 'password' | 'username' | 'account_tile' | 'none';
 
 const SEL = {
@@ -62,7 +67,38 @@ const SEL = {
   kmsi: '#KmsiCheckboxField',
   back: '#idBtn_Back',
   consent: '#consentHeader',
+  proofUp: '#idSubmit_ProofUp_Redirect',
+  heading: '#loginHeader, [role=heading], h1, .text-title, #idDiv_SAOTCAS_Title',
 };
+
+const AADSTS = /AADSTS\d{5,6}/;
+const clip = (t: string | null | undefined, n = 80) => (t ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+
+async function headingText(page: Page): Promise<string> {
+  for (const el of await page.locator(SEL.heading).all().catch(() => [])) {
+    if (await el.isVisible().catch(() => false)) {
+      const t = clip(await el.innerText().catch(() => ''));
+      if (t) return t;
+    }
+  }
+  return '';
+}
+
+const bodyText = (page: Page) => page.locator('body').innerText({ timeout: 1000 }).catch(() => '');
+
+/**
+ * Where sign-in stopped, for diagnosis: page address (no query or fragment), title, visible
+ * heading and any AADSTS error code. Never reads input values.
+ */
+async function describe(page: Page): Promise<string> {
+  let where = '';
+  try { const u = new URL(page.url()); where = `${u.host}${u.pathname}`; } catch { /* blank */ }
+  const title = clip(await page.title().catch(() => ''));
+  const heading = await headingText(page);
+  const code = (await bodyText(page)).match(AADSTS)?.[0];
+  return [where, title && `title "${title}"`, heading && heading !== title && `heading "${heading}"`, code]
+    .filter(Boolean).join(', ') || 'no page loaded';
+}
 
 const visible = (page: Page, sel: string) => page.locator(sel).first().isVisible().catch(() => false);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -74,6 +110,9 @@ async function detectState(page: Page, authorityHost: string, username: string):
   if (url && /\/consent/i.test(url.pathname)) return 'consent';
   if (await visible(page, SEL.consent)) return 'consent';
   if (url && /^https?:$/.test(url.protocol) && url.host !== authorityHost) return 'federated';
+  const heading = (await headingText(page)).toLowerCase();
+  if (heading.startsWith('permissions requested')) return 'consent';
+  if ((await visible(page, SEL.proofUp)) || /^(more information required|action required|let's keep your account secure)/.test(heading)) return 'proof_up';
   if (await visible(page, SEL.passwordError)) return 'password_error';
   if ((await page.locator(SEL.kmsi).count().catch(() => 0)) > 0 && (await visible(page, SEL.back))) return 'kmsi';
   if (await visible(page, SEL.otc)) return 'otc';
@@ -82,6 +121,8 @@ async function detectState(page: Page, authorityHost: string, username: string):
   if (await visible(page, SEL.passwd)) return 'password';
   if (await visible(page, SEL.loginfmt)) return 'username';
   if (await visible(page, `[data-test-id=${JSON.stringify(username)}]`)) return 'account_tile';
+  // Microsoft shows many sign-in errors on its own page instead of redirecting back.
+  if (AADSTS.test(await bodyText(page))) return 'aad_error';
   return 'none';
 }
 
@@ -93,12 +134,15 @@ function onAuthority(page: Page, authorityHost: string): boolean {
 function mapAuthError(error: string, description: string): SignInCategory {
   const s = `${error} ${description}`;
   if (/AADSTS5300[03]\b/.test(s)) return 'conditional_access';
-  if (/AADSTS65001\b/.test(s)) return 'needs_consent';
-  if (/AADSTS50053\b/.test(s)) return 'account_locked';
+  if (/AADSTS(65001|700016)\b/.test(s)) return 'needs_consent';
+  if (/AADSTS(50053|50057)\b/.test(s)) return 'account_locked';
+  if (/AADSTS50126\b/.test(s)) return 'wrong_password';
+  if (/AADSTS(50072|50079)\b/.test(s)) return 'mfa_setup_required';
+  if (/AADSTS(50020|50034|90072)\b/.test(s)) return 'wrong_tenant';
   return 'page_changed';
 }
 
-type Outcome = { code: string } | { category: SignInCategory };
+type Outcome = { code: string } | { category: SignInCategory; detail?: string };
 
 export class SignInBrowser {
   /**
@@ -168,7 +212,10 @@ export class SignInBrowser {
       if (sp.get('state') !== state) { outcome = { category: 'page_changed' }; return; }
       const err = sp.get('error');
       const code = sp.get('code');
-      outcome = err || !code ? { category: mapAuthError(err ?? '', sp.get('error_description') ?? '') } : { code };
+      const desc = sp.get('error_description') ?? '';
+      outcome = err || !code
+        ? { category: mapAuthError(err ?? '', desc), detail: `redirect error ${clip(err, 40)}${desc.match(AADSTS) ? ` ${desc.match(AADSTS)![0]}` : ''}` }
+        : { code };
     };
     const matcher = (u: URL) => isRedirect(u.href);
     const handler = async (route: Route) => {
@@ -181,13 +228,13 @@ export class SignInBrowser {
     const page = await context.newPage();
     try {
       const result = await this.drive(page, url, new URL(authority).host, p, () => outcome);
-      if ('category' in result) throw new SignInError(result.category);
+      if ('category' in result) throw new SignInError(result.category, result.detail);
       this.signedIn.add(user);
       return { code: result.code, verifier };
     } catch (e) {
       // Playwright errors can quote selectors or page content: never pass them through.
       if (e instanceof BrokerError) throw e;
-      throw new SignInError('page_changed');
+      throw new SignInError('page_changed', `${await describe(page)} (an expected button or field did not respond)`);
     } finally {
       context.off('request', onRequest);
       await context.unroute(matcher, handler).catch(() => {});
@@ -218,20 +265,26 @@ export class SignInBrowser {
         if (s !== 'none' && (s !== prev || reloaded)) { state = s; break; }
         if (Date.now() >= stepEnd) {
           // Same page still showing after a full step: retry its action (bounded below).
-          if (s === 'none') return { category: 'page_changed' };
+          if (s === 'none') return { category: 'page_changed', detail: await describe(page) };
           break;
         }
         await sleep(150);
       }
       const n = (actions.get(state) ?? 0) + 1;
       actions.set(state, n);
-      if (n > 3) return { category: 'page_changed' };
+      if (n > 3) return { category: 'page_changed', detail: `${await describe(page)} (still there after 3 tries)` };
       marker = Date.now();
       await page.evaluate((m) => { (window as any).__sib = m; }, marker).catch(() => {});
 
       switch (state) {
         case 'consent': return { category: 'needs_consent' };
-        case 'federated': return { category: 'federated' };
+        case 'federated': return { category: 'federated', detail: await describe(page) };
+        case 'proof_up': return { category: 'mfa_setup_required' };
+        case 'aad_error': {
+          const code = (await bodyText(page)).match(AADSTS)?.[0] ?? '';
+          const category = mapAuthError(code, '');
+          return category === 'page_changed' ? { category, detail: await describe(page) } : { category, detail: code };
+        }
         case 'password_error': return { category: 'wrong_password' };
         case 'username':
           await page.locator(SEL.loginfmt).first().fill(p.username);
@@ -262,7 +315,7 @@ export class SignInBrowser {
           break;
       }
     }
-    return outcome() ?? { category: 'page_changed' };
+    return outcome() ?? { category: 'page_changed', detail: `${await describe(page)} (timed out)` };
   }
 
   async close(): Promise<void> {

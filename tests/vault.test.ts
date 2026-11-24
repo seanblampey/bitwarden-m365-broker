@@ -105,6 +105,28 @@ describe('Vault', () => {
     expect(e.message).toContain('tenant');
     expect(e.message).not.toContain('SEEDADATUM');
   });
+  it('gives every item a unique alias when Bitwarden names repeat', async () => {
+    const mk = (id: string, name: string, username: string, tenant: string): BwItem =>
+      ({ id, name, login: { username, password: `pw-${id}`, totp: 'JBSWY3DPEHPK3PXP' }, fields: [{ name: 'tenant', value: tenant }] });
+    const items = [
+      mk('a', 'O365 - Northwind', 'admin@northwind.example', 'northwind.example'),
+      mk('b', 'O365 - Northwind', 'ops@northwind.example', 'northwind.example'),
+      mk('c', 'O365 - Northwind', 'ops@northwind.example', 'other.com'),
+      mk('d', 'Solo', 'x@solo.com', 'solo.com'),
+    ];
+    const { vault } = setup({ items });
+    const aliases = await vault.listTenants();
+    expect(aliases).toEqual([
+      'O365 - Northwind (admin@northwind.example)',
+      'O365 - Northwind (ops@northwind.example)',
+      'O365 - Northwind (ops@northwind.example) #2',
+      'Solo',
+    ]);
+    expect(new Set(aliases).size).toBe(aliases.length);
+    expect((await vault.getCredential('O365 - Northwind (ops@northwind.example) #2')).tenant).toBe('other.com');
+    expect((await vault.getCredential('O365 - Northwind (admin@northwind.example)')).alias).toBe('O365 - Northwind (admin@northwind.example)');
+    await expect(vault.getCredential('O365 - Northwind')).rejects.toMatchObject({ code: 'not_allowed' });
+  });
   it('handles malformed items defensively', async () => {
     const { vault } = setup({ items: [null, 'x', 5, { id: 'z' }, { name: 'bare' }, { name: 'bad', login: 'x', fields: 'y' }, good] });
     expect(await vault.listTenants()).toEqual(['bare', 'bad', 'contoso-admin']);

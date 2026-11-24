@@ -195,7 +195,7 @@ export class Broker {
   private toError(tenant: string | undefined, e: unknown): Record<string, string> {
     const { redactor, audit } = this.deps;
     if (e instanceof SignInError) {
-      audit.write({ type: 'signin_failed', ...(tenant !== undefined ? { tenant } : {}), detail: e.category });
+      audit.write({ type: 'signin_failed', ...(tenant !== undefined ? { tenant } : {}), detail: e.detail ? `${e.category}: ${e.detail}` : e.category });
       return { error: e.code, message: redactor.scrub(e.message), category: e.category };
     }
     if (e instanceof BrokerError) return { error: e.code, message: redactor.scrub(e.message) };

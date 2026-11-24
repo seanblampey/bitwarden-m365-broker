@@ -7,11 +7,14 @@ export interface BrokerConfig {
   folderName: string;
   idleMinutes: number;
   graphScopes: string[];
+  /** Show the sign-in browser window instead of running it hidden (for diagnosing sign-in). */
+  showSignInWindow: boolean;
 }
 
 const DEFAULTS: BrokerConfig = {
   folderName: 'Claude Access',
   idleMinutes: 30,
+  showSignInWindow: false,
   graphScopes: [
     'https://graph.microsoft.com/User.ReadWrite.All',
     'https://graph.microsoft.com/Group.ReadWrite.All',
@@ -71,6 +74,10 @@ export function loadConfig(configFile: string): BrokerConfig {
       throw new BrokerError('bad_config', 'graphScopes must be an array of strings');
     }
     cfg.graphScopes = p.graphScopes as string[];
+  }
+  if (p.showSignInWindow !== undefined) {
+    if (typeof p.showSignInWindow !== 'boolean') throw new BrokerError('bad_config', 'showSignInWindow must be true or false');
+    cfg.showSignInWindow = p.showSignInWindow;
   }
   return cfg;
 }
