@@ -7,8 +7,8 @@ describe('buildGraphUrl', () => {
     expect(buildGraphUrl('/me', 'beta')).toBe('https://graph.microsoft.com/beta/me');
   });
   it('rejects escaping or malformed paths', () => {
-    for (const bad of ['https://evil.com/x', '//evil.com/x', 'users', '/users/../../x', '/users\\x', '/a\r\nb', '', '/users/%2e%2e/x', '/users/./x', '/a\u0000b']) {
-      expect(() => buildGraphUrl(bad, 'v1.0'), bad).toThrow(/path/);
+    for (const bad of ['https://evil.com/x', '//evil.com/x', 'users', '/users/../../x', '/users\\x', '/a\r\nb', '', '/users/%2e%2e/x', '/users/./x', '/a\u0000b', '/users/..#', '/users#x']) {
+      expect(() => buildGraphUrl(bad, 'v1.0'), bad).toThrow(expect.objectContaining({ code: 'invalid_path' }));
     }
   });
   it('always yields host graph.microsoft.com', () => {
@@ -42,7 +42,7 @@ describe('cmdlets', () => {
   });
   it('rejects bad names', () => {
     for (const bad of ['Get-Mailbox; rm x', 'Invoke-Expression', 'Start-Process', 'iex', 'Get-Mailbox|x', '&Get-Mailbox', 'Get-Content ', 'New-Object', 'Add-Type', 'Set-ExecutionPolicy', 'Out-File', 'Export-Csv', 'Import-Module', 'Stop-Process']) {
-      expect(() => validateCmdlet(bad), bad).toThrow(/cmdlet/);
+      expect(() => validateCmdlet(bad), bad).toThrow(expect.objectContaining({ code: 'invalid_cmdlet' }));
     }
     try { validateCmdlet('x'.repeat(5000)); expect.unreachable(); } catch (e: any) {
       expect(e.code).toBe('invalid_cmdlet');
@@ -63,7 +63,7 @@ describe('validateParameters', () => {
   });
   it('rejects bad shapes', () => {
     for (const bad of [{ 'Bad Key': 1 }, { '-Identity': 'x' }, null, [1], 'x', undefined, { A: undefined }, { A: () => 1 }, { A: NaN }, { A: new Date() }]) {
-      expect(() => validateParameters(bad)).toThrow(/parameter/i);
+      expect(() => validateParameters(bad)).toThrow(expect.objectContaining({ code: 'invalid_parameters' }));
     }
   });
 });

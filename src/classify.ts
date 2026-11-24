@@ -16,6 +16,7 @@ export function buildGraphUrl(path: string, apiVersion: 'v1.0' | 'beta'): string
   if (!path.startsWith('/')) return bad('must start with "/"');
   if (path.startsWith('//')) return bad('must not start with "//"');
   if (path.includes('\\')) return bad('must not contain backslashes');
+  if (path.includes('#')) return bad('must not contain "#"');
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(path)) return bad('must not contain control characters');
   const beforeQuery = path.split('?')[0];
