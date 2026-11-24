@@ -164,6 +164,33 @@ describe('TokenManager', () => {
     expect(s.browser.close).toHaveBeenCalledTimes(1);
   });
 
+  it('maps a failed browser launch to browser_failed and retries the launch on the next call', async () => {
+    const s = setup([() => tokenResp(1)]);
+    s.getBrowser.mockImplementationOnce(async () => {
+      throw new Error('browserType.launch: Executable doesn\'t exist at C:\\Program Files\\msedge.exe');
+    });
+    const e = await s.tm.getAccessToken(cred, res).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(BrokerError);
+    expect(e).toMatchObject({ code: 'browser_failed', message: 'Could not start Microsoft Edge for sign-in. Is Edge installed?' });
+    const r = await s.tm.getAccessToken(cred, res);
+    expect(r.upn).toBe('admin@acme.com');
+    expect(s.getBrowser).toHaveBeenCalledTimes(2);
+    await s.tm.drop();
+    expect(s.browser.close).toHaveBeenCalledOnce();
+  });
+
+  it('drop() after a failed launch does not throw', async () => {
+    const s = setup([]);
+    let fail!: (e: Error) => void;
+    s.getBrowser.mockImplementationOnce(() => new Promise((_r, rej) => { fail = rej; }));
+    const pending = s.tm.getAccessToken(cred, res).catch((x: unknown) => x);
+    await Promise.resolve();
+    const dropped = s.tm.drop();
+    fail(new Error('launch failed'));
+    await expect(dropped).resolves.toBeUndefined();
+    expect(await pending).toMatchObject({ code: 'browser_failed' });
+  });
+
   it('drop() without a browser does not obtain one', async () => {
     const s = setup([]);
     await s.tm.drop();

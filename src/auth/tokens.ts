@@ -59,7 +59,9 @@ export class TokenManager {
       this.cache.clear();
       const bp = this.browserP;
       this.browserP = undefined;
-      if (bp) await (await bp).close();
+      // A launch that failed has nothing to close.
+      const browser = bp ? await bp.catch(() => undefined) : undefined;
+      await browser?.close();
       return;
     }
     for (const k of [...this.cache.keys()]) if (k.startsWith(`${alias}:`)) this.cache.delete(k);
@@ -78,8 +80,7 @@ export class TokenManager {
         this.cache.delete(key);
       }
     }
-    this.browserP ??= this.deps.getBrowser();
-    const browser = await this.browserP;
+    const browser = await this.browser();
     const { code, verifier } = await browser.authorize({
       authority: this.deps.authority,
       tenant: cred.tenant,
@@ -97,6 +98,19 @@ export class TokenManager {
       scope: resource.scopes.join(' '),
     });
     return this.store(key, cred, await this.post(cred.tenant, body));
+  }
+
+  /** Launches the sign-in browser once; a failed launch is forgotten so the next call retries. */
+  private browser(): Promise<SignInBrowser> {
+    if (!this.browserP) {
+      const p = this.deps.getBrowser().catch(() => {
+        if (this.browserP === p) this.browserP = undefined;
+        // Launch errors can quote paths and command lines: never pass them through.
+        throw new BrokerError('browser_failed', 'Could not start Microsoft Edge for sign-in. Is Edge installed?');
+      });
+      this.browserP = p;
+    }
+    return this.browserP;
   }
 
   private refresh(cred: Credential, resource: Resource, refreshToken: string): Promise<CacheEntry> {
