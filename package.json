@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-assets.mjs",
     "test": "vitest run"
   },
   "dependencies": {
