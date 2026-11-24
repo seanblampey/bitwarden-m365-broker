@@ -52,6 +52,28 @@ function tenantField(item: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+/**
+ * Alias -> item, so every alias is unique. A Bitwarden name used once is its own alias;
+ * a repeated name becomes "name (username)", and "#2", "#3"... if that still repeats.
+ */
+function aliasMap(items: readonly BwItem[]): Map<string, BwItem> {
+  const named = items.flatMap((item) => {
+    const name = itemName(item);
+    return name === undefined ? [] : [{ item, name }];
+  });
+  const count = new Map<string, number>();
+  for (const { name } of named) count.set(name, (count.get(name) ?? 0) + 1);
+  const out = new Map<string, BwItem>();
+  for (const { item, name } of named) {
+    const user = item.login?.username?.trim();
+    const base = (count.get(name) ?? 0) > 1 && user ? `${name} (${user})` : name;
+    let alias = base;
+    for (let n = 2; out.has(alias); n++) alias = `${base} #${n}`;
+    out.set(alias, item);
+  }
+  return out;
+}
+
 export class Vault {
   private state: Unlocked | null = null;
   private inflight: Promise<Unlocked> | null = null;
@@ -64,12 +86,12 @@ export class Vault {
 
   async listTenants(): Promise<string[]> {
     const { items } = await this.ensure();
-    return items.map(itemName).filter((n): n is string => n !== undefined);
+    return [...aliasMap(items).keys()];
   }
 
   async getCredential(alias: string): Promise<Credential> {
     const { items } = await this.ensure();
-    const item = items.find((i) => itemName(i) === alias) as unknown as Record<string, unknown> | undefined;
+    const item = aliasMap(items).get(alias) as unknown as Record<string, unknown> | undefined;
     if (!item) {
       throw new BrokerError('not_allowed', `"${alias}" is not in the Bitwarden folder "${this.deps.folderName}".`);
     }

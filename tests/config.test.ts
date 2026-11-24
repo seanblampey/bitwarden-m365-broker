@@ -15,6 +15,14 @@ describe('loadConfig', () => {
     expect(c.graphScopes).toHaveLength(11);
     expect(c.graphScopes).toContain('offline_access');
   });
+  it('reads showSignInWindow and rejects non-booleans', () => {
+    const f = join(dir(), 'c.json');
+    writeFileSync(f, '{ "showSignInWindow": true }');
+    expect(loadConfig(f).showSignInWindow).toBe(true);
+    writeFileSync(f, '{ "showSignInWindow": "yes" }');
+    expect(() => loadConfig(f)).toThrow(/showSignInWindow/);
+    expect(loadConfig(join(dir(), 'nope.json')).showSignInWindow).toBe(false);
+  });
   it('merges a partial file', () => {
     const f = join(dir(), 'c.json');
     writeFileSync(f, JSON.stringify({ idleMinutes: 5 }));

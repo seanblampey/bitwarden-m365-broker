@@ -16,6 +16,12 @@ export interface FakeLoginOpts {
   error?: string;
   /** Serve a page none of the known selectors match. */
   unknownPage?: boolean;
+  /** Serve Microsoft's own error page (no redirect) showing this AADSTS code. */
+  aadErrorPage?: string;
+  /** Serve the "More information required" MFA registration interrupt. */
+  proofUp?: boolean;
+  /** Serve a consent page recognisable only by its heading (no /Consent URL, no #consentHeader). */
+  consentHeading?: boolean;
   /** Extra accounts (username -> password) besides `username`. */
   users?: Record<string, string>;
   /** Echo a state that does not match the request's. */
@@ -99,6 +105,9 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
       }
       if (opts.federated) return redirect(res, `http://localhost:${port}/adfs/ls`);
       if (opts.unknownPage) return send(res, page('<h1>Something new</h1><p>Unrecognised page.</p>'));
+      if (opts.aadErrorPage) return send(res, page(`<div id="loginHeader" role="heading">Sign in</div><p>Sorry, but we're having trouble signing you in.</p><p>${opts.aadErrorPage}: User account '${f.hint}' does not exist in tenant.</p>`));
+      if (opts.proofUp) return send(res, page('<div id="loginHeader" role="heading">More information required</div><input type="submit" id="idSubmit_ProofUp_Redirect" value="Next">'));
+      if (opts.consentHeading) return send(res, page('<div role="heading">Permissions requested</div><input type="submit" id="idSIButton9" value="Accept" formaction="/consent-accept">'));
       const id = randomBytes(8).toString('hex');
       flows.set(id, f);
       const session = decodeURIComponent(/fakesession=([^;]*)/.exec(cookie)?.[1] ?? '').split(',').filter(Boolean);

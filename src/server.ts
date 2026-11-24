@@ -96,7 +96,7 @@ export async function main(): Promise<void> {
   });
   const tokens = new TokenManager({
     authority: 'https://login.microsoftonline.com',
-    getBrowser: () => SignInBrowser.launch({ channel: 'msedge', headless: true }),
+    getBrowser: () => SignInBrowser.launch({ channel: 'msedge', headless: !config.showSignInWindow }),
     fetch: globalThis.fetch,
     redactor,
   });

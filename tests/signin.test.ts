@@ -129,16 +129,57 @@ describe('SignInBrowser.authorize', () => {
     ['AADSTS53000', 'conditional_access'],
     ['AADSTS65001', 'needs_consent'],
     ['AADSTS50053', 'account_locked'],
+    ['AADSTS700016', 'needs_consent'],
+    ['AADSTS50057', 'account_locked'],
+    ['AADSTS50126', 'wrong_password'],
+    ['AADSTS50079', 'mfa_setup_required'],
+    ['AADSTS50020', 'wrong_tenant'],
     ['AADSTS99999', 'page_changed'],
   ])('maps redirect error %s to %s', async (code, cat) => {
     const { browser, params } = await setup({ error: code });
-    expect((await category(browser.authorize(params()))).category).toBe(cat);
+    const err = await category(browser.authorize(params()));
+    expect(err.category).toBe(cat);
+    expect(err.message).toContain(code);
+  });
+
+  it.each([
+    ['AADSTS50020', 'wrong_tenant'],
+    ['AADSTS50034', 'wrong_tenant'],
+    ['AADSTS53003', 'conditional_access'],
+  ])('recognises Microsoft error page %s as %s', async (code, cat) => {
+    const { browser, params } = await setup({ aadErrorPage: code });
+    const err = await category(browser.authorize(params()));
+    expect(err.category).toBe(cat);
+    expect(err.message).toContain(code);
+  });
+
+  it('reports an unmapped Microsoft error page with its code and heading', async () => {
+    const { browser, params } = await setup({ aadErrorPage: 'AADSTS12345' });
+    const err = await category(browser.authorize(params()));
+    expect(err.category).toBe('page_changed');
+    expect(err.message).toContain('AADSTS12345');
+    expect(err.message).toContain('heading "Sign in"');
+  });
+
+  it('recognises the "More information required" MFA setup interrupt', async () => {
+    const { browser, params } = await setup({ proofUp: true });
+    expect((await category(browser.authorize(params()))).category).toBe('mfa_setup_required');
+  });
+
+  it('recognises a consent page by its heading and never accepts it', async () => {
+    const { site, browser, params } = await setup({ consentHeading: true });
+    expect((await category(browser.authorize(params()))).category).toBe('needs_consent');
+    expect(site.acceptPosted()).toBe(false);
   });
 
   it('fails with page_changed on an unknown page within the step timeout', async () => {
     const { browser, params } = await setup({ unknownPage: true });
     const t0 = Date.now();
-    expect((await category(browser.authorize(params()))).category).toBe('page_changed');
+    const err = await category(browser.authorize(params()));
+    expect(err.category).toBe('page_changed');
     expect(Date.now() - t0).toBeLessThan(5000);
+    // Says where it stopped (address without query, heading), never field values.
+    expect(err.message).toMatch(/Stopped at: 127\.0\.0\.1:\d+\/contoso\.com\/oauth2\/v2\.0\/authorize, heading "Something new"/);
+    expect(err.message).not.toContain('client_id');
   });
 });

@@ -61,6 +61,7 @@ Path: `%APPDATA%\claude-bw-broker\config.json`. If it is missing, defaults are u
 | Field | Default | Meaning |
 |---|---|---|
 | `folderName` | `Claude Access` | Bitwarden folder that holds the allowed items |
+| `showSignInWindow` | `false` | Show the Microsoft sign-in window instead of running it hidden. Turn on to watch where a failing sign-in stops. |
 | `idleMinutes` | `30` | Minutes of inactivity before the vault locks (you are asked for the master password again) |
 | `graphScopes` | User, Group, Directory, MailboxSettings, TeamSettings (ReadWrite), Organization, Reports, AuditLog (Read), plus `offline_access`, `openid`, `profile` | Graph permissions requested at sign-in |
 
@@ -81,6 +82,9 @@ Connect-MgGraph -Scopes "User.ReadWrite.All","Group.ReadWrite.All","Directory.Re
 Tick "Consent on behalf of your organization" on the Microsoft page. Alternatively grant admin consent to "Microsoft Graph Command Line Tools" in Entra admin center under Enterprise applications. If you changed `graphScopes` in the config, change this list to match. For Exchange, run `Connect-ExchangeOnline` once the same way if sign-in still reports consent. Then try `connect` again.
 
 ## Using it
+
+Each Bitwarden item in the folder appears under its own name. If two items share a name, they appear as "name (username)", with "#2", "#3" added if that still repeats, so every name `list_tenants` returns is unique.
+
 
 Just ask Claude, naming the tenant alias:
 
@@ -136,7 +140,7 @@ Run these on a real Windows PC with a test tenant before relying on it.
 | `folder_missing` | No Bitwarden folder with the configured name (default `Claude Access`). Create it, or set `folderName`. Sync the vault with `bw sync` if you just made it. |
 | `not_allowed` | The alias is not an item in that folder. Check the name with `list_tenants`. |
 | `item_incomplete` | The Bitwarden item lacks username, password, TOTP key or the `tenant` field; the message says which. |
-| `signin_failed` | Microsoft sign-in did not complete. The `category` says why: `wrong_password`, `mfa_not_totp` (account has no authenticator-app option), `needs_consent`, `conditional_access` (policy blocked a non-compliant or non-trusted sign-in), `federated` (unsupported), `account_locked`, `page_changed` (sign-in page unexpected or timed out). |
+| `signin_failed` | Microsoft sign-in did not complete. The `category` says why: `wrong_password`, `mfa_not_totp` (account has no authenticator-app option), `needs_consent`, `conditional_access` (policy blocked a non-compliant or non-trusted sign-in), `federated` (unsupported), `account_locked` (locked or disabled), `mfa_setup_required` (Microsoft wants the account to set up its MFA methods: sign in once yourself and finish it), `wrong_tenant` (the account does not exist in that tenant: check the username and `tenant` field), `page_changed` (a sign-in page the broker does not recognise, or a timeout). The message ends with "Stopped at:" and the page address, title, heading and any `AADSTS` code, so you can see which page it was. To watch it happen, set `"showSignInWindow": true` in the config and restart Claude Code. |
 | `signin_failed` with category `needs_consent` | See "Per-tenant consent". |
 | `wrong_account` | Microsoft signed in as a different account than the Bitwarden item. Fix the item. |
 | `token_failed` | The token request failed (network or Microsoft error code in the message). Retry; check connectivity. |
