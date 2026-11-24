@@ -103,14 +103,17 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
       flows.set(id, f);
       const session = decodeURIComponent(/fakesession=([^;]*)/.exec(cookie)?.[1] ?? '').split(',').filter(Boolean);
       // Without prompt an existing session is used silently: the hinted account if signed in,
-      // otherwise (pessimistically) the first signed-in account. With prompt=select_account the
-      // picker offers the hinted account only if it has a session; else the login page.
+      // otherwise (pessimistically) the first signed-in account. With prompt=select_account and
+      // any session, real Entra shows "Pick an account" (signed-in tiles plus "Use another account"),
+      // even when the hinted account is not among them; the login page appears only with no session.
       if (session.length && u.searchParams.get('prompt') !== 'select_account') {
         f.user = session.includes(f.hint) ? f.hint : session[0];
         return finish(res, f);
       }
-      if (session.includes(f.hint))
-        return send(res, page(form(id, 'pick', `<button type="submit" data-test-id="${f.hint}">${f.hint}</button>`)));
+      if (session.length) {
+        const tiles = session.map((s) => `<button type="submit" name="pick" value="${s}" data-test-id="${s}">${s}</button>`).join('');
+        return send(res, page(form(id, 'pick', `${tiles}<div id="otherTile">Use another account</div>`)));
+      }
       return send(res, page(form(id, 'user', '<input name="loginfmt" type="email"><input type="submit" id="idSIButton9" value="Next">')));
     }
     if (req.method === 'GET' && path === '/adfs/ls') return send(res, page('<form><input name="UserName"><input name="Password" type="password"></form>'));
@@ -155,7 +158,7 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
         case 'kmsi':
           return afterKmsi(res, id, f);
         case 'pick':
-          f.user = f.hint;
+          f.user = b.get('pick') ?? '';
           return finish(res, f);
       }
     }

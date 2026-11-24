@@ -101,26 +101,37 @@ function mapAuthError(error: string, description: string): SignInCategory {
 type Outcome = { code: string } | { category: SignInCategory };
 
 export class SignInBrowser {
-  /** Lower-cased usernames that completed sign-in in this context (silent SSO only for them). */
+  /**
+   * One in-memory context (no storageState, no profile dir) per lower-cased username, created on first use.
+   * Each account's cookies stay apart, so a second account never meets the first one's account picker.
+   */
+  private readonly contexts = new Map<string, BrowserContext>();
+  /** Lower-cased usernames that completed sign-in in their context (silent SSO only for them). */
   private readonly signedIn = new Set<string>();
-  /** Serialises authorize(): the redirect route is context-wide, so calls must not overlap. */
+  /** Serialises authorize() so sign-ins never overlap. */
   private queue: Promise<unknown> = Promise.resolve();
 
   private constructor(
     private readonly browser: Browser,
-    private readonly context: BrowserContext,
     private readonly stepMs: number,
     private readonly overallMs: number,
   ) {}
 
-  /** One in-memory context (no storageState, no profile dir) shared by all authorize calls. */
   static async launch(opts: LaunchOpts = {}): Promise<SignInBrowser> {
     const browser = await chromium.launch({
       headless: opts.headless ?? true,
       ...(opts.executablePath ? { executablePath: opts.executablePath } : { channel: opts.channel ?? 'msedge' }),
     });
-    const context = await browser.newContext();
-    return new SignInBrowser(browser, context, opts.stepTimeoutMs ?? 15_000, opts.overallTimeoutMs ?? 60_000);
+    return new SignInBrowser(browser, opts.stepTimeoutMs ?? 15_000, opts.overallTimeoutMs ?? 60_000);
+  }
+
+  private async contextFor(user: string): Promise<BrowserContext> {
+    let context = this.contexts.get(user);
+    if (!context) {
+      context = await this.browser.newContext();
+      this.contexts.set(user, context);
+    }
+    return context;
   }
 
   authorize(p: SignInParams): Promise<{ code: string; verifier: string }> {
@@ -133,6 +144,8 @@ export class SignInBrowser {
     const { verifier, challenge } = pkcePair();
     const state = randomBytes(16).toString('base64url');
     const user = p.username.toLowerCase();
+    // Playwright errors can quote internals: never pass them through.
+    const context = await this.contextFor(user).catch(() => { throw new SignInError('page_changed'); });
     const authority = p.authority.replace(/\/+$/, '');
     const q = new URLSearchParams({
       client_id: p.resource.clientId,
@@ -162,10 +175,10 @@ export class SignInBrowser {
       capture(route.request().url());
       await route.abort().catch(() => {});
     };
-    await this.context.route(matcher, handler);
+    await context.route(matcher, handler);
     const onRequest = (r: Request) => capture(r.url());
-    this.context.on('request', onRequest);
-    const page = await this.context.newPage();
+    context.on('request', onRequest);
+    const page = await context.newPage();
     try {
       const result = await this.drive(page, url, new URL(authority).host, p, () => outcome);
       if ('category' in result) throw new SignInError(result.category);
@@ -176,8 +189,8 @@ export class SignInBrowser {
       if (e instanceof BrokerError) throw e;
       throw new SignInError('page_changed');
     } finally {
-      this.context.off('request', onRequest);
-      await this.context.unroute(matcher, handler).catch(() => {});
+      context.off('request', onRequest);
+      await context.unroute(matcher, handler).catch(() => {});
       await page.close().catch(() => {});
     }
   }
@@ -253,7 +266,9 @@ export class SignInBrowser {
   }
 
   async close(): Promise<void> {
-    await this.context.close().catch(() => {});
+    const contexts = [...this.contexts.values()];
+    this.contexts.clear();
+    await Promise.all(contexts.map((c) => c.close().catch(() => {})));
     await this.browser.close().catch(() => {});
   }
 }
