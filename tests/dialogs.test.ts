@@ -48,4 +48,10 @@ describe('scripts', () => {
     expect(existsSync(new URL('password.ps1', dir))).toBe(true);
     expect(readFileSync(new URL('confirm.ps1', dir), 'utf8')).toContain('Button2');
   });
+  it('confirm.ps1 never truncates the action and refuses (exit 2) anything over 1600 characters', () => {
+    const src = readFileSync(new URL('../src/win/confirm.ps1', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/Substring/i);
+    expect(src).not.toContain("'...'");
+    expect(src).toMatch(/if \(\$action\.Length -gt 1600\) \{ exit 2 \}/);
+  });
 });

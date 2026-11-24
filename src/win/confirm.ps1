@@ -8,7 +8,9 @@ try {
 
   $req = [Console]::In.ReadToEnd() | ConvertFrom-Json
   $action = [string]$req.action
-  if ($action.Length -gt 1500) { $action = $action.Substring(0, 1500) + '...' }
+  # Never truncate: the user must see the whole action. The broker refuses anything over 1500
+  # characters before calling us; this is a backstop.
+  if ($action.Length -gt 1600) { exit 2 }
 
   $text = "Tenant: $($req.tenant)`r`nAccount: $($req.account)`r`n`r`nAction:`r`n$action`r`n`r`nAllow this change?"
 

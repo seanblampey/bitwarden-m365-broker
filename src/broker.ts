@@ -24,8 +24,8 @@ export interface BrokerDeps {
 
 const GRAPH_METHODS: readonly GraphMethod[] = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'];
 const API_VERSIONS = ['v1.0', 'beta'] as const;
-const MAX_ACTION_BODY = 1500;
-const MAX_ACTION = 4000;
+/** Longest action text the approval box shows in full; confirm.ps1 refuses anything much longer. */
+export const MAX_ACTION = 1500;
 
 /** Thrown internally when the user answers No; converted to the `denied` result. */
 class Denied extends BrokerError {
@@ -34,13 +34,24 @@ class Denied extends BrokerError {
   }
 }
 
-function truncate(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+// C0/C1 controls, Arabic letter mark, Mongolian vowel separator, zero-width and bidi marks,
+// line/paragraph separators, bidi embeddings/overrides/isolates and other invisible format chars, BOM.
+const FORMAT_CHARS = '\\u007f-\\u009f\\u061C\\u180E\\u200B-\\u200F\\u2028-\\u202E\\u2060-\\u206F\\uFEFF';
+const UNSAFE_CHARS = new RegExp(`[\\u0000-\\u001f${FORMAT_CHARS}]`, 'g');
+/** JSON.stringify already escapes C0 controls inside strings; its raw newlines are layout. */
+const UNSAFE_IN_JSON = new RegExp(`[${FORMAT_CHARS}]`, 'g');
+const NAMED_ESCAPES: Record<string, string> = { '\n': '\\n', '\r': '\\r', '\t': '\\t' };
+
+const hexEscape = (c: string) => NAMED_ESCAPES[c] ?? `\\u${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`;
+
+/** Renders characters that could fake lines or reorder text as visible escapes (`\n`, `\u202E`). */
+export function escapeForDisplay(s: string): string {
+  return s.replace(UNSAFE_CHARS, hexEscape);
 }
 
-/** Cuts the dialog body to `max` characters and says how much was left out. */
-function truncateBody(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max)}\n… (${s.length - max} more characters not shown)` : s;
+/** Same for JSON.stringify output, keeping its layout newlines. */
+function escapeJsonForDisplay(json: string): string {
+  return json.replace(UNSAFE_IN_JSON, hexEscape);
 }
 
 /** PowerShell-style rendering of one parameter value, for the approval dialog only. */
@@ -48,23 +59,35 @@ function psValue(v: unknown): string {
   if (v === null) return '$null';
   if (typeof v === 'number') return String(v);
   if (typeof v === 'string') {
-    return v !== '' && /^[\w.@:/+=-]+$/.test(v) ? v : `'${v.replace(/'/g, "''")}'`;
+    return v !== '' && /^[\w.@:/+=-]+$/.test(v) ? v : `'${escapeForDisplay(v).replace(/'/g, "''")}'`;
   }
-  return JSON.stringify(v);
+  // JSON escapes control characters itself; bidi/format characters still need escaping.
+  return escapeJsonForDisplay(JSON.stringify(v) ?? String(v));
 }
 
 function cmdletAction(cmdlet: string, parameters: Record<string, unknown>): string {
-  const parts = [cmdlet];
+  const parts = [escapeForDisplay(cmdlet)];
   for (const [k, v] of Object.entries(parameters)) {
-    parts.push(typeof v === 'boolean' ? `-${k}:$${v}` : `-${k} ${psValue(v)}`);
+    const name = escapeForDisplay(k);
+    parts.push(typeof v === 'boolean' ? `-${name}:$${v}` : `-${name} ${psValue(v)}`);
   }
-  return truncate(parts.join(' '), MAX_ACTION);
+  return parts.join(' ');
 }
 
 function graphAction(method: GraphMethod, path: string, body: unknown): string {
-  const head = `Graph ${method} ${truncate(path, MAX_ACTION)}`;
+  const head = `Graph ${method} ${escapeForDisplay(path)}`;
   if (body === undefined) return head;
-  return `${head}\n${truncateBody(JSON.stringify(body, null, 2) ?? String(body), MAX_ACTION_BODY)}`;
+  return `${head}\n${escapeJsonForDisplay(JSON.stringify(body, null, 2) ?? String(body))}`;
+}
+
+/** The approval box must show the whole action, so anything longer is refused, never truncated. */
+function assertShowable(action: string): void {
+  if (action.length > MAX_ACTION) {
+    throw new BrokerError(
+      'too_long_to_approve',
+      'This change is too large to show in the approval box. Split it into smaller requests.',
+    );
+  }
 }
 
 /** Ties vault, sign-in, approval and executors together. Every method returns redacted JSON text. */
@@ -99,11 +122,13 @@ export class Broker {
         throw new BrokerError('invalid_path', 'Invalid Graph API version: expected v1.0 or beta');
       }
       buildGraphUrl(path, apiVersion);
+      const action = isGraphRead(method) ? undefined : graphAction(method, path, body);
+      if (action !== undefined) assertShowable(action);
       const cred = await this.deps.vault.getCredential(tenant);
       const { token, upn } = await this.deps.tokens.getAccessToken(cred, graphResource(this.deps.config.graphScopes));
       // Query strings can carry values ($filter=...), so the audit log records the path only.
       const detail = `${method} ${path.split('?')[0]}`;
-      if (!isGraphRead(method)) await this.approve(tenant, cred, upn, graphAction(method, path, body), detail);
+      if (action !== undefined) await this.approve(tenant, cred, upn, action, detail);
       this.deps.audit.write({ type: 'call', tenant, detail });
       return graphRequest(this.deps.fetch, token, { method, path, body, apiVersion });
     });
@@ -114,9 +139,11 @@ export class Broker {
       validateCmdlet(cmdlet);
       const params = validateParameters(parameters ?? {});
       assertNoForbiddenCommon(params);
+      const action = isCmdletRead(cmdlet) ? undefined : cmdletAction(cmdlet, params);
+      if (action !== undefined) assertShowable(action);
       const cred = await this.deps.vault.getCredential(tenant);
       const { token, upn } = await this.deps.tokens.getAccessToken(cred, EXO_RESOURCE);
-      if (!isCmdletRead(cmdlet)) await this.approve(tenant, cred, upn, cmdletAction(cmdlet, params), cmdlet);
+      if (action !== undefined) await this.approve(tenant, cred, upn, action, cmdlet);
       this.deps.audit.write({ type: 'call', tenant, detail: cmdlet });
       const result = await runCmdlet(this.deps.exo, { token, upn, organization: cred.tenant, cmdlet, parameters: params });
       return { result };
@@ -139,8 +166,17 @@ export class Broker {
 
   /** Shows the Yes/No dialog; `detail` (no bodies or parameter values) is what the audit log records. */
   private async approve(tenant: string, cred: Credential, account: string, action: string, detail: string): Promise<void> {
-    const shownTenant = cred.tenant === tenant ? tenant : `${tenant} (${cred.tenant})`;
-    const ok = await this.deps.confirm({ tenant: shownTenant, account, action: this.deps.redactor.scrub(action) });
+    const shownTenant = escapeForDisplay(cred.tenant === tenant ? tenant : `${tenant} (${cred.tenant})`);
+    // Redaction can lengthen a short secret to "[REDACTED]", so the length is checked again.
+    const shown = this.deps.redactor.scrub(action);
+    assertShowable(shown);
+    let ok: boolean;
+    try {
+      ok = await this.deps.confirm({ tenant: shownTenant, account: escapeForDisplay(account), action: shown });
+    } catch (e) {
+      this.deps.audit.write({ type: 'error', tenant, detail: `approval dialog failed: ${detail}` });
+      throw e;
+    }
     this.deps.audit.write({ type: ok ? 'approved' : 'denied', tenant, detail });
     if (!ok) throw new Denied();
   }
