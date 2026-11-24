@@ -18,7 +18,7 @@ How it keeps secrets away from Claude:
 - Claude Code running on that PC
 - Bitwarden CLI
 - Microsoft Edge
-- PowerShell with the ExchangeOnlineManagement module, version 3.1.0 or newer
+- PowerShell with the ExchangeOnlineManagement module (version 3.1.0 or newer) and Microsoft.Graph.Authentication
 
 ## One-time setup
 
@@ -31,6 +31,7 @@ How it keeps secrets away from Claude:
    - Authenticator key (TOTP): the secret seed from the account's authenticator-app setup. Only authenticator-app codes are supported.
    - A custom field of type Text named `tenant`, with the tenant's domain (for example `contoso.onmicrosoft.com`).
 5. Install the Exchange module: `Install-Module ExchangeOnlineManagement -Scope CurrentUser` (needs 3.1.0 or newer).
+6. Install the Graph sign-in module used for the consent step: `Install-Module Microsoft.Graph.Authentication -Scope CurrentUser`.
 
 ## Install
 
@@ -66,9 +67,15 @@ The audit log (what was called, approved or denied; never secrets) is at `%LOCAL
 
 ## Per-tenant consent
 
-The broker signs in using Microsoft's own public apps (Microsoft Graph Command Line Tools and Exchange Online PowerShell). It never clicks "Accept" on a consent page. If a tenant has not yet allowed those apps for the admin account, `connect` returns `needs_consent`.
+The broker signs in using Microsoft's own public apps (Microsoft Graph Command Line Tools and Exchange Online PowerShell). It never clicks "Accept" on a consent page. If a tenant has not yet allowed those apps for the admin account, `connect` returns `signin_failed` with category `needs_consent`.
 
-To fix it once per tenant: in your own PowerShell, run `Connect-MgGraph -Scopes "User.ReadWrite.All"` (and, if Exchange fails, `Connect-ExchangeOnline`), sign in as that admin and accept the consent prompt yourself. If your tenant requires admin approval for apps, grant it in Entra admin center under Enterprise applications. Then try `connect` again.
+To fix it once per tenant, in your own PowerShell (not through Claude), sign in as that admin and accept the consent prompt yourself, asking for the same permissions the broker requests:
+
+```
+Connect-MgGraph -Scopes "User.ReadWrite.All","Group.ReadWrite.All","Directory.ReadWrite.All","MailboxSettings.ReadWrite","Organization.Read.All","Reports.Read.All","AuditLog.Read.All","TeamSettings.ReadWrite.All"
+```
+
+Tick "Consent on behalf of your organization" on the Microsoft page. Alternatively grant admin consent to "Microsoft Graph Command Line Tools" in Entra admin center under Enterprise applications. If you changed `graphScopes` in the config, change this list to match. For Exchange, run `Connect-ExchangeOnline` once the same way if sign-in still reports consent. Then try `connect` again.
 
 ## Using it
 
@@ -120,9 +127,18 @@ Run these on a real Windows PC with a test tenant before relying on it.
 | `not_allowed` | The alias is not an item in that folder. Check the name with `list_tenants`. |
 | `item_incomplete` | The Bitwarden item lacks username, password, TOTP key or the `tenant` field; the message says which. |
 | `signin_failed` | Microsoft sign-in did not complete. The `category` says why: `wrong_password`, `mfa_not_totp` (account has no authenticator-app option), `needs_consent`, `conditional_access` (policy blocked a non-compliant or non-trusted sign-in), `federated` (unsupported), `account_locked`, `page_changed` (sign-in page unexpected or timed out). |
-| `needs_consent` | See "Per-tenant consent". |
+| `signin_failed` with category `needs_consent` | See "Per-tenant consent". |
 | `wrong_account` | Microsoft signed in as a different account than the Bitwarden item. Fix the item. |
 | `token_failed` | The token request failed (network or Microsoft error code in the message). Retry; check connectivity. |
 | `exo_failed` | The Exchange cmdlet failed; the message has the PowerShell error. Check module version (3.1.0+) and the cmdlet's parameters. |
 | `bw_not_found` | Bitwarden CLI is not on PATH. Install it (`npm i -g @bitwarden/cli`) and restart Claude Code. |
 | `denied` | You clicked No on the approval dialog (or it was closed). Nothing was changed. |
+| `graph_failed` | Microsoft Graph could not be reached (network). Retry; check connectivity or proxy. |
+| `bw_failed` | The Bitwarden CLI failed, timed out or returned something unexpected. Run `bw status` in your own terminal, then retry. |
+| `bad_config` | `config.json` is unreadable, not valid JSON, or a field has the wrong type; the message names it. Fix or delete the file. |
+| `bad_totp_seed` | The item's authenticator key is not a valid base32 seed or otpauth link. Re-copy it from the account's MFA setup. |
+| `invalid_method` | Claude used a Graph method other than GET, POST, PATCH, PUT, DELETE. Ask it to retry. |
+| `invalid_path` | The Graph path or API version was rejected (must start with "/", stay on graph.microsoft.com, version v1.0 or beta). |
+| `invalid_cmdlet` | The cmdlet name is malformed or not an Exchange Online cmdlet (for example `Get-Content`). |
+| `invalid_parameters` | The cmdlet parameters were rejected (names must be plain; some common parameters are not allowed). |
+| `internal` | Unexpected broker error. Details are in `audit.jsonl`; report it. |
