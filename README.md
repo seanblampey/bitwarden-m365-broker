@@ -71,7 +71,7 @@ The audit log (what was called, approved or denied; never secrets) is at `%LOCAL
 
 ## Per-tenant consent
 
-The broker signs in using Microsoft's own public apps (Microsoft Graph Command Line Tools and Exchange Online PowerShell). It never clicks "Accept" on a consent page. If a tenant has not yet allowed those apps for the admin account, `connect` returns `signin_failed` with category `needs_consent`.
+The broker signs in using Microsoft's own public apps (Microsoft Graph Command Line Tools and Exchange Online PowerShell). It never clicks "Accept" on a consent page. If a tenant has not yet allowed those apps for the admin account, `connect` returns `signin_failed` with category `needs_consent`. The error message then includes the exact fix for that tenant: a one-click admin-consent link and the `Connect-MgGraph` command with the right scopes. Expect this once for each tenant that has never used Microsoft Graph Command Line Tools.
 
 To fix it once per tenant, in your own Windows PowerShell (not through Claude), sign in as that admin and accept the consent prompt yourself, asking for the same permissions the broker requests:
 
