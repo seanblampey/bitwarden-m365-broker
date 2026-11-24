@@ -1,0 +1,5 @@
+{
+  "name": "bitwarden-m365",
+  "version": "0.1.0",
+  "description": "Microsoft 365 admin via Bitwarden logins, without exposing secrets to Claude"
+}
