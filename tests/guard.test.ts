@@ -99,6 +99,17 @@ describe('review fixes', () => {
   });
 });
 
+describe('HOME expansion', () => {
+  it('denies $HOME and ${HOME} spellings', () => {
+    expect(allowed('Bash', { command: 'cat $HOME/AppData/Roaming/"Bitwarden CLI"/data.json' })).toBe(false);
+    expect(allowed('Bash', { command: 'cat ${HOME}/AppData/Roaming/claude-bw-broker/config.json' })).toBe(false);
+    expect(allowed('Bash', { command: 'cat $HOME/.claude/settings.json' })).toBe(false);
+  });
+  it('does not mis-expand $HOMEPATH', () => {
+    expect(allowed('Bash', { command: 'echo $HOMEPATH/AppData/Roaming/Bitwarden' })).toBe(true);
+  });
+});
+
 describe('main.ts', () => {
   const run = (input: string) =>
     spawnSync('node', ['--import', 'tsx', 'src/hook/main.ts'], {

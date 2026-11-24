@@ -58,7 +58,7 @@ function normalizeCommand(cmd: string, env: GuardEnv): string[] {
   const base = cmd.toLowerCase();
   const sub = (s: string, re: RegExp, val: string) => (val ? s.replace(re, () => val.toLowerCase()) : s);
   let expanded = base;
-  expanded = sub(expanded, /%userprofile%|\$\{?(env:)?userprofile\}?/g, env.userProfile);
+  expanded = sub(expanded, /%userprofile%|\$\{?(env:)?userprofile\}?|\$\{home\}|\$home(?![a-z0-9_])/g, env.userProfile);
   expanded = sub(expanded, /%localappdata%|\$\{?(env:)?localappdata\}?/g, env.localAppData);
   expanded = sub(expanded, /%appdata%|\$\{?(env:)?appdata\}?/g, env.appData);
   expanded = expanded.replace(/(^|[\s'"=:(])~(?=[\\/]|$|\s|['")])/g, (_m, pre: string) => pre + env.userProfile.toLowerCase());
@@ -68,6 +68,8 @@ function normalizeCommand(cmd: string, env: GuardEnv): string[] {
     // Git-Bash drive form /c/users/... also matched as c:/users/...
     const drive = dotless.replace(/(^|[\s'"=(:])\/([a-z])\//g, '$1$2:/');
     variants.push(slashed, dotless, drive);
+    // shell quoting can split a path (Roaming/"Bitwarden CLI"); also match with quotes removed
+    variants.push(drive.replace(/["']/g, ''));
   }
   return variants;
 }
