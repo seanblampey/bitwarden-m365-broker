@@ -72,6 +72,11 @@ describe('run-cmdlet.ps1', () => {
     expect(src).toContain("$params['ErrorAction'] = 'Stop'");
     expect(src).toContain("[version]'3.1.0'");
   });
+  it('install and update hints name Windows PowerShell (powershell.exe)', () => {
+    const lines = src.split('\n').filter((l) => /Install-Module|Update-Module/.test(l));
+    expect(lines).toHaveLength(2);
+    for (const l of lines) expect(l).toContain('in Windows PowerShell (powershell.exe)');
+  });
   it('sets Confirm:$false for approved (non-Get) cmdlets that have a Confirm parameter', () => {
     const block = /if \(\(\$name -cnotlike 'Get-\*'\) -and \$cmd\.Parameters\.ContainsKey\('Confirm'\)\) \{\s*\$params\['Confirm'\] = \$false\s*\}/;
     expect(src).toMatch(block);

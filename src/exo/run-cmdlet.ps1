@@ -34,12 +34,12 @@ try {
     try {
         Import-Module ExchangeOnlineManagement -ErrorAction Stop | Out-Null
     } catch {
-        throw 'ExchangeOnlineManagement module not installed. Run: Install-Module ExchangeOnlineManagement -Scope CurrentUser'
+        throw 'ExchangeOnlineManagement module not installed for Windows PowerShell. Run in Windows PowerShell (powershell.exe), not PowerShell 7: Install-Module ExchangeOnlineManagement -Scope CurrentUser'
     }
 
     $mod = Get-Module ExchangeOnlineManagement | Sort-Object Version -Descending | Select-Object -First 1
     if ($null -eq $mod -or $mod.Version -lt [version]'3.1.0') {
-        throw 'ExchangeOnlineManagement 3.1.0 or later is required. Run: Update-Module ExchangeOnlineManagement'
+        throw 'ExchangeOnlineManagement 3.1.0 or later is required. Run in Windows PowerShell (powershell.exe), not PowerShell 7: Update-Module ExchangeOnlineManagement'
     }
 
     Connect-ExchangeOnline -AccessToken ([string]$req.token) -UserPrincipalName ([string]$req.upn) -Organization ([string]$req.organization) -ShowBanner:$false -ErrorAction Stop 6>$null | Out-Null

@@ -18,7 +18,7 @@ How it keeps secrets away from Claude:
 - Claude Code running on that PC
 - Bitwarden CLI
 - Microsoft Edge
-- PowerShell with the ExchangeOnlineManagement module (version 3.1.0 or newer) and Microsoft.Graph.Authentication
+- Windows PowerShell 5.1 (`powershell.exe`, built into Windows) with the ExchangeOnlineManagement module (version 3.1.0 or newer) and Microsoft.Graph.Authentication
 
 ## One-time setup
 
@@ -30,8 +30,10 @@ How it keeps secrets away from Claude:
    - Username and password of the admin account.
    - Authenticator key (TOTP): the secret seed from the account's authenticator-app setup. Only authenticator-app codes are supported.
    - A custom field of type Text named `tenant`, with the tenant's domain (for example `contoso.onmicrosoft.com`).
-5. Install the Exchange module: `Install-Module ExchangeOnlineManagement -Scope CurrentUser` (needs 3.1.0 or newer).
-6. Install the Graph sign-in module used for the consent step: `Install-Module Microsoft.Graph.Authentication -Scope CurrentUser`.
+5. Open **Windows PowerShell** (`powershell.exe`, not PowerShell 7 / `pwsh`) and install the Exchange module: `Install-Module ExchangeOnlineManagement -Scope CurrentUser` (needs 3.1.0 or newer).
+6. In the same Windows PowerShell window, install the Graph sign-in module used for the consent step: `Install-Module Microsoft.Graph.Authentication -Scope CurrentUser`.
+
+   Why Windows PowerShell: the broker always runs `powershell.exe` (5.1). `Install-Module -Scope CurrentUser` run from PowerShell 7 puts modules in `Documents\PowerShell\Modules`, which Windows PowerShell does not search, so the broker would report the module as not installed. Check with `powershell.exe -NoProfile -Command "Get-Module -ListAvailable ExchangeOnlineManagement"`.
 
 ## Install
 
@@ -69,7 +71,7 @@ The audit log (what was called, approved or denied; never secrets) is at `%LOCAL
 
 The broker signs in using Microsoft's own public apps (Microsoft Graph Command Line Tools and Exchange Online PowerShell). It never clicks "Accept" on a consent page. If a tenant has not yet allowed those apps for the admin account, `connect` returns `signin_failed` with category `needs_consent`.
 
-To fix it once per tenant, in your own PowerShell (not through Claude), sign in as that admin and accept the consent prompt yourself, asking for the same permissions the broker requests:
+To fix it once per tenant, in your own Windows PowerShell (not through Claude), sign in as that admin and accept the consent prompt yourself, asking for the same permissions the broker requests:
 
 ```
 Connect-MgGraph -Scopes "User.ReadWrite.All","Group.ReadWrite.All","Directory.ReadWrite.All","MailboxSettings.ReadWrite","Organization.Read.All","Reports.Read.All","AuditLog.Read.All","TeamSettings.ReadWrite.All"
@@ -92,7 +94,8 @@ Claude is told to explain every change in chat before the Yes/No box appears.
 ## Limits and accepted risks
 
 - Claude Code runs as your Windows user, as does the broker. Another process of the same user could, in principle, reach the same things. The hook only blocks Claude's own tools.
-- The approval dialog is a plain Yes/No box. It shows the tenant, account and action, but you must read it.
+- The approval dialog is a plain Yes/No box. It shows the tenant, account and the complete action, but you must read it. Line breaks, tabs, other control characters and invisible or text-direction (bidi) characters in values are shown as escapes such as `\n` or `\u202E`, so a value cannot fake extra lines. A change whose action text is longer than 1500 characters is refused (`too_long_to_approve`) rather than shown cut off. An unanswered dialog closes after 5 minutes (a password dialog then fails with `dialog_failed`; an approval counts as No).
+- Approved Exchange cmdlets run with `-Confirm:$false` (your Yes is the confirmation), so `Remove-*` cmdlets do not prompt again. Claude cannot pass `Confirm` itself; `WhatIf` is allowed.
 - Only authenticator-app (TOTP) MFA is supported. Federated sign-in is not.
 - The hook blocks plain use of `bw`, but deliberately obfuscated calls are not caught.
 - The PowerShell scripts and the Microsoft sign-in page automation have only been tested against fakes, not against real Windows or real Microsoft pages. The checklist below is the real test. Microsoft changing its sign-in page can break sign-in (reported as `signin_failed` with category `page_changed`).
@@ -101,7 +104,7 @@ Claude is told to explain every change in chat before the Yes/No box appears.
 
 Run these on a real Windows PC with a test tenant before relying on it.
 
-1. Ask Claude to run `list_tenants`. Expected: a password dialog takes keyboard focus; typing the master password and pressing Enter returns your aliases.
+1. Ask Claude to run `list_tenants`. Expected: a password dialog appears on top (not hidden, no stray console window) and takes keyboard focus even while Claude Code's terminal is in the foreground; typing the master password and pressing Enter returns your aliases.
 2. Run `lock`, then `list_tenants` again and click Cancel in the dialog. Expected: error `unlock_cancelled`, no hang.
 3. `connect` to a real tenant. Expected: returns the admin's account name, no visible browser window.
 4. `graph_request` GET `/organization`. Expected: tenant details, no dialog.
@@ -114,7 +117,12 @@ Run these on a real Windows PC with a test tenant before relying on it.
 9. `exo_cmdlet Get-Content`. Expected: refused (it is not an Exchange cmdlet).
 10. Ask Claude to run `bw list items`. Expected: blocked by the hook.
 11. Set `"idleMinutes": 1` in the config, restart Claude Code, use a tenant, wait 2 minutes, call `list_tenants`. Expected: the password dialog appears again.
-12. Open `audit.jsonl` and run `Select-String -Path "$env:LOCALAPPDATA\claude-bw-broker\audit.jsonl" -Pattern "<your password>"`. Expected: no matches (also try the TOTP seed).
+12. Open `audit.jsonl` (yourself, not through Claude) and run `Select-String -Path "$env:LOCALAPPDATA\claude-bw-broker\audit.jsonl" -Pattern "<your password>"`. Expected: no matches (also try the TOTP seed).
+13. With two Bitwarden items for different tenants and different admin accounts, `connect` to the first, then to the second, in the same Claude Code session. Expected: both return their own account; no `page_changed`. Then run a `Get-` cmdlet in each tenant again: no new sign-in.
+14. Create a test inbox rule, then `exo_cmdlet Remove-InboxRule -Identity <rule>` on a test mailbox and click Yes. Expected: the rule is removed (no "NonInteractive mode" error, no second dialog).
+15. Ask Claude to run `Set-Mailbox` on a test mailbox with a value containing a line break. Expected: the dialog shows `\n` inside the value, not a new line.
+16. Close Microsoft Edge completely, then `disconnect` and `connect` again. Expected: sign-in still works (the broker starts its own hidden Edge). If Edge is not installed: error `browser_failed`, and a retry after installing Edge works without restarting Claude Code.
+17. Install a module only from PowerShell 7 (`pwsh`) on a test PC. Expected: `exo_failed` saying to install it in Windows PowerShell (powershell.exe).
 
 ## Troubleshooting
 
@@ -122,6 +130,7 @@ Run these on a real Windows PC with a test tenant before relying on it.
 |---|---|
 | `not_logged_in` | Bitwarden CLI is not logged in. Run `bw login` in your own terminal, then retry. |
 | `unlock_cancelled` | You closed the master password dialog. Retry and enter it. |
+| `dialog_failed` | The Windows password or approval dialog could not be shown (for example PowerShell could not start, or a policy blocks scripts), or the password dialog was not answered within 5 minutes. Nothing was changed. Check that `powershell.exe` runs, then retry. |
 | `wrong_master_password` | Bitwarden rejected the master password (3 tries). Retry. |
 | `folder_missing` | No Bitwarden folder with the configured name (default `Claude Access`). Create it, or set `folderName`. Sync the vault with `bw sync` if you just made it. |
 | `not_allowed` | The alias is not an item in that folder. Check the name with `list_tenants`. |
@@ -130,9 +139,11 @@ Run these on a real Windows PC with a test tenant before relying on it.
 | `signin_failed` with category `needs_consent` | See "Per-tenant consent". |
 | `wrong_account` | Microsoft signed in as a different account than the Bitwarden item. Fix the item. |
 | `token_failed` | The token request failed (network or Microsoft error code in the message). Retry; check connectivity. |
-| `exo_failed` | The Exchange cmdlet failed; the message has the PowerShell error. Check module version (3.1.0+) and the cmdlet's parameters. |
+| `exo_failed` | The Exchange cmdlet failed; the message has the PowerShell error. Check module version (3.1.0+), that it is installed in Windows PowerShell (`powershell.exe`, not PowerShell 7), and the cmdlet's parameters. |
 | `bw_not_found` | Bitwarden CLI is not on PATH. Install it (`npm i -g @bitwarden/cli`) and restart Claude Code. |
-| `denied` | You clicked No on the approval dialog (or it was closed). Nothing was changed. |
+| `denied` | You clicked No on the approval dialog (or it was closed, or left unanswered for 5 minutes). Nothing was changed. |
+| `too_long_to_approve` | The change is too large to show in full in the approval box (over 1500 characters), so it was refused before anything happened. Ask Claude to split it into smaller requests. |
+| `browser_failed` | Microsoft Edge could not be started for sign-in. Check that Edge is installed and starts normally, then retry (no restart needed). |
 | `graph_failed` | Microsoft Graph could not be reached (network). Retry; check connectivity or proxy. |
 | `bw_failed` | The Bitwarden CLI failed, timed out or returned something unexpected. Run `bw status` in your own terminal, then retry. |
 | `bad_config` | `config.json` is unreadable, not valid JSON, or a field has the wrong type; the message names it. Fix or delete the file. |
@@ -140,5 +151,5 @@ Run these on a real Windows PC with a test tenant before relying on it.
 | `invalid_method` | Claude used a Graph method other than GET, POST, PATCH, PUT, DELETE. Ask it to retry. |
 | `invalid_path` | The Graph path or API version was rejected (must start with "/", stay on graph.microsoft.com, version v1.0 or beta). |
 | `invalid_cmdlet` | The cmdlet name is malformed or not an Exchange Online cmdlet (for example `Get-Content`). |
-| `invalid_parameters` | The cmdlet parameters were rejected (names must be plain; some common parameters are not allowed). |
+| `invalid_parameters` | The cmdlet parameters were rejected (names must be plain; common parameters that redirect output, and `Confirm`, are not allowed). |
 | `internal` | Unexpected broker error. Details are in `audit.jsonl`; report it. |
