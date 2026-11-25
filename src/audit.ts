@@ -3,7 +3,9 @@ import { dirname } from 'node:path';
 import type { Redactor } from './redact.js';
 
 export type AuditEvent = {
-  type: 'unlock' | 'lock' | 'connect' | 'signin_failed' | 'call' | 'approved' | 'denied' | 'error';
+  type:
+    | 'unlock' | 'lock' | 'connect' | 'signin_failed' | 'call' | 'approved' | 'denied' | 'error'
+    | 'consent_requested' | 'consent_approved' | 'consent_denied' | 'consent_granted' | 'consent_failed';
   tenant?: string;
   detail?: string;
 };
