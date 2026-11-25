@@ -4,6 +4,8 @@ import { SignInBrowser, SignInError, type SignInParams } from '../src/auth/signi
 import { EXO_RESOURCE, graphResource, type Resource } from '../src/auth/resources.js';
 import { startFakeLogin, type FakeLogin, type FakeLoginOpts } from './fixtures/fake-login/server.js';
 import { totp } from '../src/crypto.js';
+import { TokenManager } from '../src/auth/tokens.js';
+import { Redactor } from '../src/redact.js';
 
 const SEED = 'JBSWY3DPEHPK3PXP';
 const USER = 'admin@contoso.com';
@@ -245,5 +247,49 @@ describe('SignInBrowser.authorize', () => {
       const { browser, params } = await setup({ consent: true, wrongState: true });
       expect((await category(browser.grantConsent(params()))).category).toBe('page_changed');
     });
+  });
+});
+
+describe('one-click consent, end to end (real TokenManager and browser, fake Microsoft)', () => {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const fakeJwt = (claims: object) => `eyJ${b64({ alg: 'none' }).slice(3)}.${b64(claims)}.sig`;
+  const cred = { alias: 'contoso', username: USER, password: PASS, totpSeed: SEED, tenant: 'contoso.com' };
+
+  async function run(answer: boolean) {
+    site = await startFakeLogin({ username: USER, password: PASS, seed: SEED, consent: true });
+    browser = await SignInBrowser.launch({ executablePath: existsSync(EXE) ? EXE : undefined, stepTimeoutMs: 2000, overallTimeoutMs: 10000 });
+    const asked: unknown[] = [];
+    const codes: string[] = [];
+    const tm = new TokenManager({
+      authority: site.url,
+      getBrowser: async () => browser!,
+      fetch: (async (_url: string, init: { body: string }) => {
+        codes.push(new URLSearchParams(init.body).get('code') ?? '');
+        return new Response(JSON.stringify({ access_token: fakeJwt({ upn: USER }), refresh_token: 'r', id_token: fakeJwt({ preferred_username: USER }), expires_in: 3600 }));
+      }) as never,
+      redactor: new Redactor(),
+      approveConsent: async (r) => { asked.push(r); return answer; },
+      consentWaitMs: 0,
+    });
+    return { tm, asked, codes, site };
+  }
+
+  it('Yes: approves the app, signs in again and returns a token', async () => {
+    const t = await run(true);
+    const out = await t.tm.getAccessToken(cred, res('graph'));
+    expect(out.upn).toBe(USER);
+    expect(t.asked).toEqual([{ alias: 'contoso', tenant: 'contoso.com', account: USER, appName: 'App graph', scopes: ['graph.read'] }]);
+    expect(t.site.adminAccepts()).toBe(1);
+    expect(t.codes[0]).toMatch(/^CODE-/);
+  });
+
+  it('No: nothing is approved and sign-in ends with needs_consent', async () => {
+    const t = await run(false);
+    const err = await t.tm.getAccessToken(cred, res('graph')).catch((e) => e);
+    expect(err).toBeInstanceOf(SignInError);
+    expect(err.category).toBe('needs_consent');
+    expect(t.site.adminAccepts()).toBe(0);
+    expect(t.site.acceptPosted()).toBe(false);
+    expect(t.codes).toEqual([]);
   });
 });

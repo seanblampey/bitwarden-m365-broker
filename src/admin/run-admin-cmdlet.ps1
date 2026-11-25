@@ -142,7 +142,7 @@ try {
         foreach ($pattern in $origins) { if ($src -like $pattern) { $allowed = $true } }
     }
     if (-not $allowed) {
-        $envelope = @{ ok = $false; error = "Cmdlet is not a $service cmdlet." }
+        $envelope = @{ ok = $false; error = "This cmdlet does not belong to the $service PowerShell module, so it was not run." }
     } else {
         $params = @{}
         if ($null -ne $req.parameters) {
