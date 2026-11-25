@@ -1,6 +1,6 @@
 # Admin portals through PowerShell — Design
 
-Status: draft for approval, 2026-11-25.
+Status: approved by the user 2026-11-25 (including one-click consent).
 
 ## Intent
 
@@ -120,6 +120,18 @@ A new "Work efficiently" section:
    - Top-level arrays and Graph `{ value: [...] }` responses keep whole items until the cap. `totalItems` is the array length, or `@odata.count` when Graph supplied it.
    - Any other value is cut at the character cap, with `truncated: true` and a note.
 6. **Error code.** `exo_failed` is renamed to `cmdlet_failed`, and the README and skill are updated to match.
+
+## One-click consent (user-approved 2026-11-25)
+
+The design used to say the broker never accepts consent. That is now replaced by consent with the user's Yes:
+- When sign-in for any client app (Graph, Exchange/Compliance, Teams, SharePoint) stops at a consent page (`needs_consent`), the broker shows a Yes/No dialog, No by default. It says: "Microsoft asks you to approve <app name> for <tenant alias (domain)>, for the whole organisation, with these permissions: <scope list>".
+- On Yes, in the same per-account browser context, the broker opens `https://login.microsoftonline.com/<tenant>/v2.0/adminconsent?client_id=<client>&scope=<the exact scopes the broker requests>&redirect_uri=<the client's redirect>&state=<random>`. On the authority host only, it clicks Accept and waits for the redirect: `admin_consent=True` with a matching state means success, and `error` means failure. Then it retries the original sign-in once.
+- On No, a timeout, or a dialog failure, the result is today's `needs_consent` error with the manual steps.
+- The client ID and scopes come only from `resources.ts` and config, never from the model. The model cannot trigger consent directly; it only happens inside a sign-in the broker started.
+- Microsoft says the account can't grant consent (not an admin; `AADSTS90094` or similar) → a new category, `consent_not_allowed`, whose message says the account needs Global Admin, Privileged Role Admin or Cloud Application Admin.
+- Page not recognised → today's `needs_consent` error with the manual steps plus "Stopped at:".
+- Audit events: `consent_requested`, `consent_approved` or `consent_denied`, and `consent_granted` or `consent_failed`, with the app name and tenant.
+- Tested against the fake login site: Accept appears only after a Yes, and No never posts accept.
 
 ## Left to the builder
 - The exact ps1 structure (one script with a per-service switch is expected).
