@@ -4,10 +4,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { AuditLog } from './audit.js';
-import { Broker } from './broker.js';
+import { defaultPsRunner as adminPsRunner } from './admin/runner.js';
+import { SERVICES } from './admin/services.js';
+import { Broker, makeConsentApprover } from './broker.js';
 import { defaultPaths, loadConfig } from './config.js';
 import { BrokerError } from './errors.js';
-import { defaultPsRunner as exoPsRunner } from './exo.js';
 import { Redactor } from './redact.js';
 import { SignInBrowser } from './auth/signin.js';
 import { TokenManager } from './auth/tokens.js';
@@ -39,13 +40,13 @@ export function createServer(broker: Broker): McpServer {
   );
   server.registerTool(
     'connect',
-    { description: 'Sign in to a tenant\'s Microsoft Graph with its stored admin login and return the signed-in account.', inputSchema: { tenant } },
+    { description: 'Sign in to a tenant\'s Microsoft Graph with its stored admin login and return the signed-in account. Optional: graph_request and admin_cmdlet sign in by themselves.', inputSchema: { tenant } },
     async (a) => result(await broker.connect(a.tenant)),
   );
   server.registerTool(
     'graph_request',
     {
-      description: `Call Microsoft Graph (https://graph.microsoft.com) for a tenant; GET is a read. ${APPROVAL}`,
+      description: `Call Microsoft Graph (https://graph.microsoft.com) for a tenant; GET is a read. Always use $select and $top (and $filter) to keep results small. ${APPROVAL}`,
       inputSchema: {
         tenant,
         method: z.enum(['GET', 'POST', 'PATCH', 'PUT', 'DELETE']),
@@ -57,16 +58,23 @@ export function createServer(broker: Broker): McpServer {
     async (a) => result(await broker.graphRequest(a.tenant, a.method, a.path, a.body, a.api_version)),
   );
   server.registerTool(
-    'exo_cmdlet',
+    'admin_cmdlet',
     {
-      description: `Run one Exchange Online PowerShell cmdlet for a tenant; Get- cmdlets are reads. ${APPROVAL}`,
+      description:
+        'Run one PowerShell admin cmdlet for a tenant: service "exchange" (Exchange Online), "compliance" (Security & Compliance / Purview), '
+        + '"teams" (Microsoft Teams) or "sharepoint" (PnP PowerShell). Get- cmdlets are reads. '
+        + `Always pass select (the properties you need) and first (how many items) to keep results small. ${APPROVAL}`,
       inputSchema: {
         tenant,
-        cmdlet: z.string().describe('Exchange Online cmdlet name, e.g. Get-Mailbox'),
+        service: z.enum(SERVICES),
+        cmdlet: z.string().describe('Cmdlet name, e.g. Get-Mailbox, Get-RetentionCompliancePolicy, Get-CsTeamsMeetingPolicy, Get-PnPTenantSite'),
         parameters: z.record(z.string(), z.unknown()).optional().describe('Named parameters, e.g. {"Identity":"user@x.com"}'),
+        select: z.array(z.string()).optional().describe('Property names to return, e.g. ["DisplayName","PrimarySmtpAddress"]; dotted paths allowed'),
+        first: z.number().int().min(1).max(1000).optional().describe('Return at most this many items (default 200); the total count is still reported'),
+        site: z.string().optional().describe('sharepoint only: site URL to work in, e.g. https://contoso.sharepoint.com/sites/Finance; default is the admin site'),
       },
     },
-    async (a) => result(await broker.exoCmdlet(a.tenant, a.cmdlet, a.parameters)),
+    async (a) => result(await broker.adminCmdlet(a.tenant, a.service, a.cmdlet, a.parameters, { select: a.select, first: a.first, site: a.site })),
   );
   server.registerTool(
     'disconnect',
@@ -99,13 +107,16 @@ export async function main(): Promise<void> {
     getBrowser: () => SignInBrowser.launch({ channel: 'msedge', headless: !config.showSignInWindow }),
     fetch: globalThis.fetch,
     redactor,
+    // Microsoft wants an app approved for the tenant: ask the user, never decide here.
+    approveConsent: makeConsentApprover({ confirm: (r) => confirmAction(r), audit, redactor }),
+    audit,
   });
   const broker = new Broker({
     vault,
     tokens,
     confirm: (r) => confirmAction(r),
     fetch: globalThis.fetch,
-    exo: exoPsRunner(),
+    ps: adminPsRunner(),
     audit,
     redactor,
     config,

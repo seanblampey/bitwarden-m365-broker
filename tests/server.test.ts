@@ -9,7 +9,7 @@ function fakeBroker() {
     listTenants: vi.fn(async () => '{"tenants":["acme"]}'),
     connect: vi.fn(async (t: string) => JSON.stringify({ tenant: t, account: 'a@acme.com' })),
     graphRequest: vi.fn(async () => '{"status":200,"body":{"ok":1}}'),
-    exoCmdlet: vi.fn(async () => '{"error":"denied","message":"The user declined this change."}'),
+    adminCmdlet: vi.fn(async () => '{"error":"denied","message":"The user declined this change."}'),
     disconnect: vi.fn(async (t?: string) => JSON.stringify({ disconnected: t ?? 'all' })),
     lock: vi.fn(async () => '{"locked":true}'),
   };
@@ -29,7 +29,7 @@ describe('MCP server', () => {
     const { client } = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ['connect', 'disconnect', 'exo_cmdlet', 'graph_request', 'list_tenants', 'lock'],
+      ['admin_cmdlet', 'connect', 'disconnect', 'graph_request', 'list_tenants', 'lock'],
     );
     for (const t of tools) expect(t.description).toBeTruthy();
   });
@@ -49,11 +49,15 @@ describe('MCP server', () => {
     expect(broker.graphRequest).not.toHaveBeenCalled();
   });
 
-  it('marks broker error results as isError and passes exo parameters', async () => {
+  it('marks broker error results as isError and passes admin_cmdlet arguments', async () => {
     const { client, broker } = await connect();
-    const r = await client.callTool({ name: 'exo_cmdlet', arguments: { tenant: 'acme', cmdlet: 'Set-Mailbox', parameters: { Identity: 'x' } } });
+    const r = await client.callTool({ name: 'admin_cmdlet', arguments: { tenant: 'acme', service: 'exchange', cmdlet: 'Set-Mailbox', parameters: { Identity: 'x' }, select: ['Name'], first: 3 } });
     expect(r.isError).toBe(true);
-    expect(broker.exoCmdlet).toHaveBeenCalledWith('acme', 'Set-Mailbox', { Identity: 'x' });
+    expect(broker.adminCmdlet).toHaveBeenCalledWith('acme', 'exchange', 'Set-Mailbox', { Identity: 'x' }, { select: ['Name'], first: 3, site: undefined });
+    // an unknown service never reaches the broker
+    const bad = await client.callTool({ name: 'admin_cmdlet', arguments: { tenant: 'acme', service: 'azure', cmdlet: 'Get-Thing' } }).catch((e) => ({ isError: true, e }));
+    expect((bad as { isError?: boolean }).isError).toBe(true);
+    expect(broker.adminCmdlet).toHaveBeenCalledTimes(1);
   });
 
   it('routes the remaining tools', async () => {

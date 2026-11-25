@@ -74,6 +74,30 @@ function sharePointPlan(cred: Credential, site: unknown): ServicePlan {
   return { service: 'sharepoint', shell: 'pwsh', primary: sharePointResource(host, adminHost), url };
 }
 
+/**
+ * Checks that need no vault: the service is known, and `site` (SharePoint only) is a plain https
+ * SharePoint URL. Returns the site as it will be shown and used. Which tenant the site belongs to
+ * is checked by planFor, once the Bitwarden item is known.
+ */
+export function checkService(service: unknown, site?: unknown): { service: Service; site?: string } {
+  if (typeof service !== 'string' || !(SERVICES as readonly string[]).includes(service)) {
+    return invalid(`service must be one of ${SERVICES.join(', ')}`);
+  }
+  if (site === undefined) return { service: service as Service };
+  if (service !== 'sharepoint') return invalid('site is only for the sharepoint service');
+  if (typeof site !== 'string') return invalid('site must be a URL');
+  let u: URL;
+  try {
+    u = new URL(site);
+  } catch {
+    return invalid('site must be a full https URL');
+  }
+  if (u.protocol !== 'https:' || u.username || u.password || u.port || u.search || u.hash || !u.hostname.endsWith('.sharepoint.com')) {
+    return invalid('site must be an https URL on the tenant\'s sharepoint.com host, with no query');
+  }
+  return { service: 'sharepoint', site: `https://${u.hostname}${u.pathname.replace(/\/+$/, '')}` };
+}
+
 export function planFor(service: unknown, cred: Credential, site?: unknown): ServicePlan {
   if (typeof service !== 'string' || !(SERVICES as readonly string[]).includes(service)) {
     return invalid(`service must be one of ${SERVICES.join(', ')}`);
