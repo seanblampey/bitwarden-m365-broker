@@ -43,7 +43,7 @@ describe('plugin packaging', () => {
       'dist/hook/main.js',
       'dist/win/password.ps1',
       'dist/win/confirm.ps1',
-      'dist/exo/run-cmdlet.ps1',
+      'dist/admin/run-admin-cmdlet.ps1',
       'dist/node_modules/playwright-core/package.json',
     ]) {
       expect(existsSync(join(root, f)), f).toBe(true);
@@ -74,7 +74,7 @@ describe('plugin packaging', () => {
         send({ jsonrpc: '2.0', method: 'notifications/initialized' });
         send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
       });
-      expect(names.sort()).toEqual(['connect', 'disconnect', 'exo_cmdlet', 'graph_request', 'list_tenants', 'lock']);
+      expect(names.sort()).toEqual(['admin_cmdlet', 'connect', 'disconnect', 'graph_request', 'list_tenants', 'lock']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

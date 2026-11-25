@@ -6,7 +6,11 @@ var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __commonJS = (cb, mod) => function __require() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
 };
 var __export = (target, all) => {
   for (var name in all)
@@ -5106,8 +5110,8 @@ var require_multipleOf = __commonJS({
         const { gen, data, schemaCode, it } = cxt;
         const prec = it.opts.multipleOfPrecision;
         const res = gen.let("res");
-        const invalid = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
-        cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid}))`);
+        const invalid2 = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
+        cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid2}))`);
       }
     };
     exports.default = def;
@@ -10404,8 +10408,8 @@ var ZodSet = class _ZodSet extends ZodType {
       maxSize: { value: maxSize, message: errorUtil.toString(message) }
     });
   }
-  size(size, message) {
-    return this.min(size, message).max(size, message);
+  size(size2, message) {
+    return this.min(size2, message).max(size2, message);
   }
   nonempty(message) {
     return this.min(1, message);
@@ -10982,7 +10986,6 @@ ZodNaN.create = (params) => {
     ...processCreateParams(params)
   });
 };
-var BRAND = Symbol("zod_brand");
 var ZodBranded = class extends ZodType {
   _parse(input2) {
     const { ctx } = this._processInputParams(input2);
@@ -13153,8 +13156,8 @@ var $ZodCheckMaxSize = /* @__PURE__ */ $constructor("$ZodCheckMaxSize", (inst, d
   (_a3 = inst._zod.def).when ?? (_a3.when = _whenHasSize);
   inst._zod.check = (payload) => {
     const input2 = payload.value;
-    const size = input2.size;
-    if (size <= def.maximum)
+    const size2 = input2.size;
+    if (size2 <= def.maximum)
       return;
     payload.issues.push({
       origin: getSizableOrigin(input2),
@@ -13173,8 +13176,8 @@ var $ZodCheckMinSize = /* @__PURE__ */ $constructor("$ZodCheckMinSize", (inst, d
   (_a3 = inst._zod.def).when ?? (_a3.when = _whenHasSize);
   inst._zod.check = (payload) => {
     const input2 = payload.value;
-    const size = input2.size;
-    if (size >= def.minimum)
+    const size2 = input2.size;
+    if (size2 >= def.minimum)
       return;
     payload.issues.push({
       origin: getSizableOrigin(input2),
@@ -13193,10 +13196,10 @@ var $ZodCheckSizeEquals = /* @__PURE__ */ $constructor("$ZodCheckSizeEquals", (i
   (_a3 = inst._zod.def).when ?? (_a3.when = _whenHasSize);
   inst._zod.check = (payload) => {
     const input2 = payload.value;
-    const size = input2.size;
-    if (size === def.size)
+    const size2 = input2.size;
+    if (size2 === def.size)
       return;
-    const tooBig = size > def.size;
+    const tooBig = size2 > def.size;
     payload.issues.push({
       origin: getSizableOrigin(input2),
       ...tooBig ? { code: "too_big", maximum: def.size } : { code: "too_small", minimum: def.size },
@@ -14247,14 +14250,14 @@ var $ZodDate = /* @__PURE__ */ $constructor("$ZodDate", (inst, def) => {
     return payload;
   };
 });
-function capSize(inst, size) {
+function capSize(inst, size2) {
   const caps = sizeCaps(inst._zod.def.checks);
   if (!caps.length)
     return;
   const cap = Math.min(...caps.map((c) => c[0]));
   const parse3 = inst._zod.parse;
   inst._zod.parse = (payload, ctx) => {
-    const n = size(payload.value);
+    const n = size2(payload.value);
     if (n > cap && !ctx?.skipChecks && ctx?.direction !== "backward") {
       for (const [max, ch] of sizeCaps(inst._zod.def.checks)) {
         if (n > max && ch._zod.def.when(payload)) {
@@ -23831,8 +23834,8 @@ function registry() {
 var globalRegistry = globalThis.__zod_globalRegistry;
 
 // node_modules/zod/v4/core/compile.js
-var INVALID2 = Symbol.for("zod.compile.invalid");
-var FALLBACK_FLAG = Symbol.for("zod.compile.fallback");
+var INVALID2 = /* @__PURE__ */ Symbol.for("zod.compile.invalid");
+var FALLBACK_FLAG = /* @__PURE__ */ Symbol.for("zod.compile.fallback");
 var ZodCompileAsyncError = class extends Error {
   constructor(message = "z.compile does not support async refinements, transforms, or checks") {
     super(message);
@@ -24870,9 +24873,9 @@ function generateNullableCheck(doc, ctx, schema, accessor, buildsValue = true) {
   doc.write(`}`);
   return outputVar;
 }
-function generateSizeGate(doc, schema, size) {
+function generateSizeGate(doc, schema, size2) {
   for (const [max, check2] of sizeCaps(schema._zod.def.checks)) {
-    doc.write(`if (${size} > ${numericOperand(max, check2._zod.def.check)}) return INVALID;`);
+    doc.write(`if (${size2} > ${numericOperand(max, check2._zod.def.check)}) return INVALID;`);
   }
 }
 function generateArrayCheck(doc, ctx, schema, accessor, buildsValue = true) {
@@ -26008,11 +26011,11 @@ function _minSize(minimum, params) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function _size(size, params) {
+function _size(size2, params) {
   return new $ZodCheckSizeEquals({
     check: "size_equals",
     ...normalizeParams(params),
-    size
+    size: size2
   });
 }
 // @__NO_SIDE_EFFECTS__
@@ -27620,7 +27623,7 @@ var nonoptionalProcessor = (schema, ctx, _json, params) => {
   const seen = ctx.seen.get(schema);
   seen.ref = def.innerType;
 };
-var UNREPRESENTABLE_DEFAULT = Symbol();
+var UNREPRESENTABLE_DEFAULT = /* @__PURE__ */ Symbol();
 function serializeDefaultValue(value, schema, ctx, json2, params) {
   let unrepresentable = false;
   const serialized = JSON.stringify(value, (_, val) => {
@@ -27925,7 +27928,7 @@ function object(shape, params) {
 }
 
 // node_modules/zod/v4/core/visit.js
-var RESOLVING = Symbol("z.visit/resolving");
+var RESOLVING = /* @__PURE__ */ Symbol("z.visit/resolving");
 function visit(schema, fnOrHandlers) {
   const fn = typeof fnOrHandlers === "function" ? fnOrHandlers : (node2, rewritten) => {
     const h = fnOrHandlers[node2._zod.def.type];
@@ -29905,8 +29908,8 @@ var ZodFile = /* @__PURE__ */ $constructor("ZodFile", (inst, def) => {
   $ZodFile.init(inst, def);
   ZodType2.init(inst, def);
   inst._zod.processJSONSchema = (ctx, json2, params) => fileProcessor(inst, ctx, json2, params);
-  inst.min = (size, params) => inst.check(_minSize(size, params));
-  inst.max = (size, params) => inst.check(_maxSize(size, params));
+  inst.min = (size2, params) => inst.check(_minSize(size2, params));
+  inst.max = (size2, params) => inst.check(_maxSize(size2, params));
   inst.mime = (types, params) => inst.check(_mime(Array.isArray(types) ? types : [types], params));
 });
 function file(params) {
@@ -32631,7 +32634,7 @@ function isTerminal(status) {
 }
 
 // node_modules/zod-to-json-schema/dist/esm/Options.js
-var ignoreOverride = Symbol("Let zodToJsonSchema decide on which parser to use");
+var ignoreOverride = /* @__PURE__ */ Symbol("Let zodToJsonSchema decide on which parser to use");
 var defaultOptions = {
   name: void 0,
   $refStrategy: "root",
@@ -35621,7 +35624,7 @@ var Server = class extends Protocol {
 };
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/server/completable.js
-var COMPLETABLE_SYMBOL = Symbol.for("mcp.completable");
+var COMPLETABLE_SYMBOL = /* @__PURE__ */ Symbol.for("mcp.completable");
 function isCompletable(schema) {
   return !!schema && typeof schema === "object" && COMPLETABLE_SYMBOL in schema;
 }
@@ -36663,6 +36666,8 @@ var AuditLog = class {
     this.file = file2;
     this.redactor = redactor;
   }
+  file;
+  redactor;
   /** Appends one JSON line. Never throws: failures only warn on stderr. */
   write(e) {
     try {
@@ -36681,6 +36686,15 @@ var AuditLog = class {
     }
   }
 };
+
+// src/admin/runner.ts
+import { spawn } from "node:child_process";
+
+// src/assets.ts
+import { fileURLToPath } from "node:url";
+function assetPath(rel) {
+  return fileURLToPath(new URL(`./${rel}`, import.meta.url));
+}
 
 // src/errors.ts
 var BrokerError = class extends Error {
@@ -36731,18 +36745,42 @@ function isGraphRead(method) {
   return method === "GET";
 }
 var CMDLET_RE = /^[A-Z][a-z]+-[A-Za-z0-9]+$/;
-var DENIED_VERBS = /* @__PURE__ */ new Set(["Invoke", "Start", "Stop", "Import", "Export", "Out"]);
-var DENIED_NAMES = /* @__PURE__ */ new Set(["Add-Type", "New-Object", "Set-ExecutionPolicy"]);
+var DENIED_VERBS = /* @__PURE__ */ new Set(["Invoke", "Start", "Stop", "Import", "Export", "Out", "Connect", "Disconnect"]);
+var DENIED_NAMES = /* @__PURE__ */ new Set([
+  "Add-Type",
+  "New-Object",
+  "Set-ExecutionPolicy",
+  // PnP: hands back the live connection (with its token) / reads or writes local files.
+  "Get-PnPConnection",
+  "Get-PnPFile"
+]);
+var DENIED_PATTERN = /AccessToken|Token$|Credential|Secret|Password|Certificate/i;
 function validateCmdlet(name) {
   if (typeof name !== "string" || name.length > 100 || !CMDLET_RE.test(name)) {
     throw new BrokerError("invalid_cmdlet", "Invalid cmdlet name: expected Verb-Noun (letters and digits only)");
   }
-  if (DENIED_VERBS.has(name.split("-")[0]) || DENIED_NAMES.has(name)) {
+  if (DENIED_VERBS.has(name.split("-")[0]) || DENIED_NAMES.has(name) || DENIED_PATTERN.test(name)) {
     throw new BrokerError("invalid_cmdlet", "This cmdlet is not permitted");
   }
 }
-function isCmdletRead(name) {
-  return name.startsWith("Get-");
+var LOCAL_FILE_PARAMS = /* @__PURE__ */ new Set(["out", "outfile", "outputfile", "outputpath", "path", "literalpath", "filepath", "folder"]);
+function isCmdletRead(name, parameters = {}) {
+  if (!name.startsWith("Get-")) return false;
+  return !Object.keys(parameters).some((k) => LOCAL_FILE_PARAMS.has(k.toLowerCase()));
+}
+var SELECT_RE = /^[A-Za-z][A-Za-z0-9_.]*$/;
+function validateSelect(v) {
+  if (v === void 0) return void 0;
+  const ok = Array.isArray(v) && v.length > 0 && v.length <= 50 && v.every((x) => typeof x === "string" && x.length <= 100 && SELECT_RE.test(x));
+  if (!ok) throw new BrokerError("invalid_parameters", "Invalid parameters: select must be 1 to 50 plain property names");
+  return v;
+}
+function validateFirst(v) {
+  if (v === void 0) return void 0;
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 1e3) {
+    throw new BrokerError("invalid_parameters", "Invalid parameters: first must be a whole number from 1 to 1000");
+  }
+  return v;
 }
 var KEY_RE = /^[A-Za-z][A-Za-z0-9]*$/;
 function isJsonValue(v, depth) {
@@ -36769,15 +36807,6 @@ function validateParameters(p) {
     if (!isJsonValue(v, 0)) return bad("parameter values must be JSON (string, number, boolean, null, array, object)");
   }
   return p;
-}
-
-// src/exo.ts
-import { spawn } from "node:child_process";
-
-// src/assets.ts
-import { fileURLToPath } from "node:url";
-function assetPath(rel) {
-  return fileURLToPath(new URL(`./${rel}`, import.meta.url));
 }
 
 // src/redact.ts
@@ -36809,14 +36838,17 @@ var Redactor = class {
   }
 };
 
-// src/exo.ts
+// src/admin/runner.ts
 var TIMEOUT_MS = 5 * 60 * 1e3;
 var MAX_ERROR = 1e3;
+var EXE = { powershell: "powershell.exe", pwsh: "pwsh.exe" };
+var TIMED_OUT = "The command ran for more than 5 minutes and was stopped. Narrow it: use the cmdlet's own filter or a smaller ResultSize, or split the work.";
+var NO_PWSH = "PowerShell 7 (pwsh) is not installed, and SharePoint needs it. Install it yourself: winget install Microsoft.PowerShell";
 function defaultPsRunner() {
-  const script = assetPath("exo/run-cmdlet.ps1");
-  return (stdin) => new Promise((resolve, reject) => {
+  const script = assetPath("admin/run-admin-cmdlet.ps1");
+  return (shell, stdin) => new Promise((resolve, reject) => {
     const child = spawn(
-      "powershell.exe",
+      EXE[shell],
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script],
       { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] }
     );
@@ -36827,7 +36859,7 @@ function defaultPsRunner() {
       child.kill();
       if (!done) {
         done = true;
-        reject(new Error("timeout"));
+        reject(new BrokerError("cmdlet_failed", TIMED_OUT));
       }
     }, TIMEOUT_MS);
     child.stdout.setEncoding("utf8").on("data", (d) => {
@@ -36838,10 +36870,9 @@ function defaultPsRunner() {
     });
     child.on("error", (e) => {
       clearTimeout(timer);
-      if (!done) {
-        done = true;
-        reject(e);
-      }
+      if (done) return;
+      done = true;
+      reject(shell === "pwsh" && e.code === "ENOENT" ? new BrokerError("module_missing", NO_PWSH) : e);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -36856,15 +36887,13 @@ function defaultPsRunner() {
     child.stdin.end();
   });
 }
-var UNEXPECTED = "Exchange Online PowerShell failed unexpectedly.";
+var UNEXPECTED = "The PowerShell command failed unexpectedly.";
 function parseEnvelope(stdout) {
   const lines = stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
     try {
       const v = JSON.parse(lines[i]);
-      if (v && typeof v === "object" && typeof v.ok === "boolean") {
-        return v;
-      }
+      if (v && typeof v === "object" && typeof v.ok === "boolean") return v;
     } catch {
     }
   }
@@ -36880,7 +36909,7 @@ var FORBIDDEN_COMMON = /* @__PURE__ */ new Set([
   "outvariable",
   "outbuffer",
   "pipelinevariable",
-  // The broker's dialog is the confirmation; run-cmdlet.ps1 sets Confirm:$false itself. WhatIf stays allowed.
+  // The broker's dialog is the confirmation; the script sets Confirm:$false itself. WhatIf stays allowed.
   "confirm"
 ]);
 function assertNoForbiddenCommon(parameters) {
@@ -36890,25 +36919,176 @@ function assertNoForbiddenCommon(parameters) {
     }
   }
 }
-async function runCmdlet(run, args) {
+var SCRIPT_CODES = /* @__PURE__ */ new Set(["module_missing"]);
+async function runAdminCmdlet(run, args) {
   validateCmdlet(args.cmdlet);
   const parameters = validateParameters(args.parameters);
   assertNoForbiddenCommon(parameters);
+  const { shell, ...request } = args;
   let out;
   try {
-    out = await run(JSON.stringify({ ...args, parameters }));
-  } catch {
-    throw new BrokerError("exo_failed", UNEXPECTED);
+    out = await run(shell, JSON.stringify({ ...request, parameters }));
+  } catch (e) {
+    if (e instanceof BrokerError) throw e;
+    throw new BrokerError("cmdlet_failed", UNEXPECTED);
   }
   const env = parseEnvelope(out.stdout);
-  if (!env) throw new BrokerError("exo_failed", UNEXPECTED);
+  if (!env) throw new BrokerError("cmdlet_failed", UNEXPECTED);
   if (!env.ok) {
     const redactor = new Redactor();
     redactor.add(args.token);
-    const text = typeof env.error === "string" && env.error ? env.error : "Exchange Online command failed.";
-    throw new BrokerError("exo_failed", redactor.scrub(text).slice(0, MAX_ERROR));
+    redactor.add(args.graphToken);
+    const text = typeof env.error === "string" && env.error ? env.error : "The command failed.";
+    const code = typeof env.code === "string" && SCRIPT_CODES.has(env.code) ? env.code : "cmdlet_failed";
+    throw new BrokerError(code, redactor.scrub(text).slice(0, MAX_ERROR));
   }
-  return env.result ?? null;
+  const rawWarnings = typeof env.warnings === "string" ? [env.warnings] : Array.isArray(env.warnings) ? env.warnings : [];
+  const warnings = rawWarnings.filter((w) => typeof w === "string").slice(0, 3).map((w) => w.slice(0, 300));
+  return {
+    result: env.result ?? null,
+    ...typeof env.total === "number" ? { total: env.total } : {},
+    ...typeof env.note === "string" ? { note: env.note.slice(0, 300) } : {},
+    ...warnings.length > 0 ? { warnings } : {}
+  };
+}
+
+// src/auth/resources.ts
+var OIDC = ["offline_access", "openid", "profile"];
+function permissionScopes(resource) {
+  return resource.scopes.filter((s) => !OIDC.includes(s));
+}
+function graphResource(scopes) {
+  return {
+    key: "graph",
+    clientId: "14d82eec-204b-4c2f-b7e8-296a70dab67e",
+    redirectUri: "http://localhost",
+    scopes,
+    appName: "Microsoft Graph Command Line Tools"
+  };
+}
+var EXO_CLIENT = "fb78d390-0c51-40cd-8e17-fdbfab77341b";
+var EXO_REDIRECT = "https://login.microsoftonline.com/organizations/oauth2/nativeclient";
+var EXO_RESOURCE = {
+  key: "exo",
+  clientId: EXO_CLIENT,
+  redirectUri: EXO_REDIRECT,
+  scopes: ["https://outlook.office365.com/.default", "offline_access"],
+  appName: "Microsoft Exchange Online PowerShell",
+  connectHint: "Connect-ExchangeOnline"
+};
+var COMPLIANCE_RESOURCE = {
+  key: "compliance",
+  clientId: EXO_CLIENT,
+  redirectUri: EXO_REDIRECT,
+  scopes: ["https://ps.compliance.protection.outlook.com/.default", ...OIDC],
+  appName: "Microsoft Exchange Online PowerShell",
+  connectHint: "Connect-IPPSSession"
+};
+var TEAMS_CLIENT = "12128f48-ec9e-42f0-b203-ea49fb6af367";
+var TEAMS_REDIRECT = "https://login.microsoftonline.com/common/oauth2/nativeclient";
+var TEAMS_API_RESOURCE = {
+  key: "teams-api",
+  clientId: TEAMS_CLIENT,
+  redirectUri: TEAMS_REDIRECT,
+  scopes: ["48ac35b8-9aa8-4d74-927d-1f4a14a0b239/user_impersonation", ...OIDC],
+  appName: "Microsoft Teams PowerShell Cmdlets",
+  connectHint: "Connect-MicrosoftTeams"
+};
+var TEAMS_GRAPH_RESOURCE = {
+  key: "teams-graph",
+  clientId: TEAMS_CLIENT,
+  redirectUri: TEAMS_REDIRECT,
+  scopes: ["https://graph.microsoft.com/.default", ...OIDC],
+  appName: "Microsoft Teams PowerShell Cmdlets",
+  connectHint: "Connect-MicrosoftTeams"
+};
+function sharePointResource(host, adminHost) {
+  return {
+    key: `spo:${host}`,
+    clientId: "9bc3ab49-b65d-410a-85ad-de819febfddc",
+    redirectUri: "https://oauth.spops.microsoft.com",
+    scopes: [`https://${host}/.default`, ...OIDC],
+    appName: "Microsoft SharePoint Online Management Shell",
+    connectHint: `Connect-SPOService -Url https://${adminHost}`
+  };
+}
+
+// src/admin/services.ts
+var SERVICES = ["exchange", "compliance", "teams", "sharepoint"];
+var invalid = (why) => {
+  throw new BrokerError("invalid_parameters", `Invalid parameters: ${why}`);
+};
+var NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+function sharePointName(cred) {
+  const incomplete = () => {
+    throw new BrokerError(
+      "item_incomplete",
+      `Bitwarden item "${cred.alias}" needs a custom field "sharepoint" with the tenant's SharePoint name (the "contoso" in contoso.sharepoint.com), because it cannot be worked out from the tenant field.`
+    );
+  };
+  let name;
+  if (cred.sharepoint) {
+    name = cred.sharepoint.trim().toLowerCase().replace(/^https:\/\//, "").replace(/\/+$/, "").replace(/\.sharepoint\.com$/, "").replace(/-(admin|my)$/, "");
+  } else {
+    name = /^([a-z0-9-]+)\.onmicrosoft\.com$/i.exec(cred.tenant.trim())?.[1]?.toLowerCase();
+  }
+  if (!name || !NAME_RE.test(name)) return incomplete();
+  return name;
+}
+function sharePointPlan(cred, site) {
+  const name = sharePointName(cred);
+  const adminHost = `${name}-admin.sharepoint.com`;
+  let host = adminHost;
+  let url2 = `https://${adminHost}`;
+  if (site !== void 0) {
+    if (typeof site !== "string") return invalid("site must be a URL");
+    let u;
+    try {
+      u = new URL(site);
+    } catch {
+      return invalid("site must be a full https URL");
+    }
+    const allowed = [`${name}.sharepoint.com`, adminHost, `${name}-my.sharepoint.com`];
+    if (u.protocol !== "https:" || u.username || u.password || u.port || u.search || u.hash || !allowed.includes(u.hostname)) {
+      return invalid(`site must be an https URL on ${allowed.join(", ")} with no query`);
+    }
+    host = u.hostname;
+    url2 = `https://${host}${u.pathname.replace(/\/+$/, "")}`;
+  }
+  return { service: "sharepoint", shell: "pwsh", primary: sharePointResource(host, adminHost), url: url2 };
+}
+function checkService(service, site) {
+  if (typeof service !== "string" || !SERVICES.includes(service)) {
+    return invalid(`service must be one of ${SERVICES.join(", ")}`);
+  }
+  if (site === void 0) return { service };
+  if (service !== "sharepoint") return invalid("site is only for the sharepoint service");
+  if (typeof site !== "string") return invalid("site must be a URL");
+  let u;
+  try {
+    u = new URL(site);
+  } catch {
+    return invalid("site must be a full https URL");
+  }
+  if (u.protocol !== "https:" || u.username || u.password || u.port || u.search || u.hash || !u.hostname.endsWith(".sharepoint.com")) {
+    return invalid("site must be an https URL on the tenant's sharepoint.com host, with no query");
+  }
+  return { service: "sharepoint", site: `https://${u.hostname}${u.pathname.replace(/\/+$/, "")}` };
+}
+function planFor(service, cred, site) {
+  if (typeof service !== "string" || !SERVICES.includes(service)) {
+    return invalid(`service must be one of ${SERVICES.join(", ")}`);
+  }
+  if (service === "sharepoint") return sharePointPlan(cred, site);
+  if (site !== void 0) return invalid("site is only for the sharepoint service");
+  switch (service) {
+    case "exchange":
+      return { service: "exchange", shell: "powershell", primary: EXO_RESOURCE };
+    case "compliance":
+      return { service: "compliance", shell: "powershell", primary: COMPLIANCE_RESOURCE };
+    default:
+      return { service: "teams", shell: "powershell", primary: TEAMS_API_RESOURCE, graph: TEAMS_GRAPH_RESOURCE };
+  }
 }
 
 // src/graph.ts
@@ -36946,16 +37126,54 @@ async function graphRequest(fetchFn, token, req) {
   }
 }
 
-// src/auth/resources.ts
-function graphResource(scopes) {
-  return { key: "graph", clientId: "14d82eec-204b-4c2f-b7e8-296a70dab67e", redirectUri: "http://localhost", scopes };
+// src/shape.ts
+var MAX_RESULT_CHARS = 3e4;
+var NOTE = "Result cut to fit. Narrow the request instead of paging through it: ask for fewer fields (select / $select), fewer items (first / $top), or filter on the server ($filter, -Filter, -Identity).";
+var size = (v) => (JSON.stringify(v) ?? "null").length;
+function fit(items, budget) {
+  let used = 2;
+  let n = 0;
+  for (const item of items) {
+    const cost = size(item) + (n > 0 ? 1 : 0);
+    if (used + cost > budget) break;
+    used += cost;
+    n++;
+  }
+  return n;
 }
-var EXO_RESOURCE = {
-  key: "exo",
-  clientId: "fb78d390-0c51-40cd-8e17-fdbfab77341b",
-  redirectUri: "https://login.microsoftonline.com/organizations/oauth2/nativeclient",
-  scopes: ["https://outlook.office365.com/.default", "offline_access"]
-};
+function cutText(value, maxChars) {
+  const json2 = typeof value === "string" ? value : JSON.stringify(value) ?? "null";
+  let text = json2.slice(0, Math.max(0, maxChars - NOTE.length - 100));
+  while (size({ truncated: true, note: NOTE, text }) > maxChars && text.length > 0) {
+    text = text.slice(0, Math.floor(text.length * 0.9));
+  }
+  return { truncated: true, note: NOTE, text };
+}
+function isRecord(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+function capResult(value, opts = {}) {
+  const maxChars = opts.maxChars ?? MAX_RESULT_CHARS;
+  const overhead = NOTE.length + 120;
+  if (Array.isArray(value)) {
+    const total = Math.max(opts.total ?? 0, value.length);
+    if (size(value) <= maxChars && total === value.length) return value;
+    const n = fit(value, maxChars - overhead);
+    if (n === 0 && value.length > 0) return cutText(value, maxChars);
+    return { truncated: true, totalItems: total, shownItems: n, note: NOTE, items: value.slice(0, n) };
+  }
+  if (isRecord(value) && Array.isArray(value.value)) {
+    if (size(value) <= maxChars) return value;
+    const items = value.value;
+    const { value: _dropped, ...rest } = value;
+    const count = typeof value["@odata.count"] === "number" ? value["@odata.count"] : items.length;
+    const n = fit(items, maxChars - overhead - size(rest));
+    if (n === 0) return cutText(value, maxChars);
+    return { ...rest, truncated: true, totalItems: Math.max(count, items.length), shownItems: n, note: NOTE, value: items.slice(0, n) };
+  }
+  if (size(value) <= maxChars) return value;
+  return cutText(value, maxChars);
+}
 
 // src/auth/signin.ts
 import { chromium } from "playwright-core";
@@ -37122,11 +37340,11 @@ var utf8Encode = (arr) => {
   }
   return DECODER.decode(arr);
 };
-var randomBytes2 = (size) => {
+var randomBytes2 = (size2) => {
   if (crypto?.randomBytes) {
-    return crypto.randomBytes(size);
+    return crypto.randomBytes(size2);
   } else if (globalScope.crypto?.getRandomValues) {
-    return globalScope.crypto.getRandomValues(new Uint8Array(size));
+    return globalScope.crypto.getRandomValues(new Uint8Array(size2));
   } else {
     throw new Error("Cryptography API not available");
   }
@@ -37238,8 +37456,8 @@ var Secret = class _Secret {
   * @param {ArrayBufferLike} [config.buffer] Secret key buffer.
   * @param {number} [config.size=20] Number of random bytes to generate, ignored if 'buffer' is provided.
   */
-  constructor({ buffer, size = 20 } = {}) {
-    this.bytes = typeof buffer === "undefined" ? randomBytes2(size) : new Uint8Array(buffer);
+  constructor({ buffer, size: size2 = 20 } = {}) {
+    this.bytes = typeof buffer === "undefined" ? randomBytes2(size2) : new Uint8Array(buffer);
     Object.defineProperty(this, "bytes", {
       enumerable: true,
       writable: false,
@@ -37736,7 +37954,8 @@ function pkcePair() {
 var MESSAGES = {
   wrong_password: "Microsoft rejected the password for this account.",
   mfa_not_totp: "The account does not offer an authenticator-app code (TOTP) for MFA, so the broker cannot complete sign-in.",
-  needs_consent: "Microsoft asked for consent to the app; an administrator must grant consent first (the broker never accepts consent).",
+  needs_consent: "Microsoft asked for consent to the app, and it has not been approved for this tenant.",
+  consent_not_allowed: "Microsoft will not let this account approve the app for the organisation. The account needs a role that can grant admin consent (Global Administrator, Privileged Role Administrator or Cloud Application Administrator).",
   conditional_access: "A Conditional Access policy blocked this sign-in.",
   federated: "The account signs in through a federated identity provider, which the broker does not support.",
   account_locked: "Microsoft reports that the account is locked or disabled.",
@@ -37759,18 +37978,27 @@ var SignInError = class extends BrokerError {
   }
 };
 var GRAPH_PREFIX = "https://graph.microsoft.com/";
-function consentHelp(authority, tenant, resource) {
-  if (resource.key === "exo") {
-    return `To fix it for tenant ${tenant}: open Windows PowerShell yourself (not through Claude), run Connect-ExchangeOnline, sign in as that tenant's admin and accept the prompt. Then run connect again.`;
-  }
-  const graphScopes = resource.scopes.filter((x) => x.startsWith(GRAPH_PREFIX));
-  const short = graphScopes.map((x) => x.slice(GRAPH_PREFIX.length));
-  const link = `${authority.replace(/\/+$/, "")}/${encodeURIComponent(tenant)}/v2.0/adminconsent?${new URLSearchParams({
+function adminConsentUrl(authority, tenant, resource, state) {
+  const q = new URLSearchParams({
     client_id: resource.clientId,
-    scope: graphScopes.join(" "),
+    scope: permissionScopes(resource).join(" "),
     redirect_uri: resource.redirectUri
-  })}`;
-  return `To fix it for tenant ${tenant} (once per tenant), do ONE of these yourself, signed in as that tenant's admin: (1) open this link in your browser and click Accept: ${link} (afterwards the browser shows a "can't reach localhost" page; that is expected and consent is done); (2) in Windows PowerShell run: Connect-MgGraph -TenantId ${tenant} -Scopes ${short.map((x) => `"${x}"`).join(",")} and tick "Consent on behalf of your organization" before accepting. Then run connect again.`;
+  });
+  if (state) q.set("state", state);
+  return `${authority.replace(/\/+$/, "")}/${encodeURIComponent(tenant)}/v2.0/adminconsent?${q}`;
+}
+function consentHelp(authority, tenant, resource) {
+  const ways = [
+    `open this link in your browser and click Accept: ${adminConsentUrl(authority, tenant, resource)} (afterwards the browser may show a page that cannot be reached; that is expected and consent is done)`
+  ];
+  if (resource.key === "graph") {
+    const short = permissionScopes(resource).filter((x) => x.startsWith(GRAPH_PREFIX)).map((x) => x.slice(GRAPH_PREFIX.length));
+    ways.push(
+      `in Windows PowerShell run: Connect-MgGraph -TenantId ${tenant} -Scopes ${short.map((x) => `"${x}"`).join(",")} and tick "Consent on behalf of your organization" before accepting (needs the Microsoft.Graph.Authentication module: Install-Module Microsoft.Graph.Authentication -Scope CurrentUser)`
+    );
+  }
+  if (resource.connectHint) ways.push(`in PowerShell run ${resource.connectHint} once, sign in and accept the prompt`);
+  return `To approve "${resource.appName}" for tenant ${tenant} yourself (once per tenant), signed in as that tenant's admin, do ONE of these: ${ways.map((w, i) => `(${i + 1}) ${w}`).join("; ")}. Then try again.`;
 }
 var SEL = {
   loginfmt: "input[name=loginfmt]",
@@ -37813,6 +38041,7 @@ async function describe3(page) {
   const code = (await bodyText(page)).match(AADSTS)?.[0];
   return [where, title && `title "${title}"`, heading && heading !== title && `heading "${heading}"`, code].filter(Boolean).join(", ") || "no page loaded";
 }
+var accountTile = (username) => `[data-test-id=${JSON.stringify(username)} i]`;
 var visible = (page, sel) => page.locator(sel).first().isVisible().catch(() => false);
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function detectState(page, authorityHost, username) {
@@ -37826,6 +38055,7 @@ async function detectState(page, authorityHost, username) {
   if (url2 && /^https?:$/.test(url2.protocol) && url2.host !== authorityHost) return "federated";
   const heading = (await headingText(page)).toLowerCase();
   if (heading.startsWith("permissions requested")) return "consent";
+  if (/^(need admin approval|approval required)/.test(heading)) return "needs_admin";
   if (await visible(page, SEL.proofUp) || /^(more information required|action required|let's keep your account secure)/.test(heading)) return "proof_up";
   if (await visible(page, SEL.passwordError)) return "password_error";
   if (await page.locator(SEL.kmsi).count().catch(() => 0) > 0 && await visible(page, SEL.back)) return "kmsi";
@@ -37834,7 +38064,7 @@ async function detectState(page, authorityHost, username) {
   if (await visible(page, SEL.pushTitle) || await visible(page, SEL.pushProof)) return "other_mfa";
   if (await visible(page, SEL.passwd)) return "password";
   if (await visible(page, SEL.loginfmt)) return "username";
-  if (await visible(page, `[data-test-id=${JSON.stringify(username)}]`)) return "account_tile";
+  if (await visible(page, accountTile(username))) return "account_tile";
   if (AADSTS.test(await bodyText(page))) return "aad_error";
   return "none";
 }
@@ -37849,11 +38079,18 @@ function mapAuthError(error62, description) {
   const s = `${error62} ${description}`;
   if (/AADSTS5300[03]\b/.test(s)) return "conditional_access";
   if (/AADSTS(65001|700016)\b/.test(s)) return "needs_consent";
+  if (/AADSTS(90094|90008)\b/.test(s)) return "consent_not_allowed";
   if (/AADSTS(50053|50057)\b/.test(s)) return "account_locked";
   if (/AADSTS50126\b/.test(s)) return "wrong_password";
   if (/AADSTS(50072|50079)\b/.test(s)) return "mfa_setup_required";
   if (/AADSTS(50020|50034|90072)\b/.test(s)) return "wrong_tenant";
   return "page_changed";
+}
+function redirectFailure(sp) {
+  const err = sp.get("error") ?? "";
+  const desc = sp.get("error_description") ?? "";
+  const code = desc.match(AADSTS)?.[0];
+  return { category: mapAuthError(err, desc), detail: `redirect error ${clip(err, 40)}${code ? ` ${code}` : ""}` };
 }
 var SignInBrowser = class _SignInBrowser {
   constructor(browser, stepMs, overallMs) {
@@ -37861,6 +38098,9 @@ var SignInBrowser = class _SignInBrowser {
     this.stepMs = stepMs;
     this.overallMs = overallMs;
   }
+  browser;
+  stepMs;
+  overallMs;
   /**
    * One in-memory context (no storageState, no profile dir) per lower-cased username, created on first use.
    * Each account's cookies stay apart, so a second account never meets the first one's account picker.
@@ -37886,7 +38126,17 @@ var SignInBrowser = class _SignInBrowser {
     return context;
   }
   authorize(p) {
-    const run = this.queue.then(() => this.authorizeNow(p));
+    return this.enqueue(() => this.authorizeNow(p));
+  }
+  /**
+   * Approves the app for the whole organisation on Microsoft's admin-consent page.
+   * The caller must have the user's explicit Yes first: this is the only code that clicks Accept.
+   */
+  grantConsent(p) {
+    return this.enqueue(() => this.grantConsentNow(p));
+  }
+  enqueue(fn) {
+    const run = this.queue.then(fn);
     this.queue = run.catch(() => {
     });
     return run;
@@ -37895,9 +38145,6 @@ var SignInBrowser = class _SignInBrowser {
     const { verifier, challenge } = pkcePair();
     const state = randomBytes4(16).toString("base64url");
     const user = p.username.toLowerCase();
-    const context = await this.contextFor(user).catch(() => {
-      throw new SignInError("page_changed");
-    });
     const authority = p.authority.replace(/\/+$/, "");
     const q = new URLSearchParams({
       client_id: p.resource.clientId,
@@ -37911,19 +38158,40 @@ var SignInBrowser = class _SignInBrowser {
     if (!this.signedIn.has(user)) q.set("prompt", "select_account");
     q.set("login_hint", p.username);
     const url2 = `${authority}/${encodeURIComponent(p.tenant)}/oauth2/v2.0/authorize?${q}`;
+    const result2 = await this.visit(p, url2, state, false, (sp) => {
+      const code = sp.get("code");
+      return sp.get("error") || !code ? redirectFailure(sp) : { code };
+    });
+    if (!("code" in result2)) throw new SignInError("page_changed");
+    this.signedIn.add(user);
+    return { code: result2.code, verifier };
+  }
+  async grantConsentNow(p) {
+    const state = randomBytes4(16).toString("base64url");
+    const url2 = adminConsentUrl(p.authority, p.tenant, p.resource, state);
+    const result2 = await this.visit(p, url2, state, true, (sp) => {
+      if (sp.get("error")) return redirectFailure(sp);
+      return /^true$/i.test(sp.get("admin_consent") ?? "") ? { consented: true } : { category: "page_changed", detail: "admin consent was not confirmed" };
+    });
+    if (!("consented" in result2)) throw new SignInError("page_changed");
+    this.signedIn.add(p.username.toLowerCase());
+  }
+  /**
+   * Opens `url` in the account's context, works through Microsoft's pages, and returns what the redirect
+   * back to the app said. Failures throw SignInError. `acceptConsent` is true only for grantConsent.
+   */
+  async visit(p, url2, state, acceptConsent, read) {
+    const user = p.username.toLowerCase();
+    const context = await this.contextFor(user).catch(() => {
+      throw new SignInError("page_changed");
+    });
+    const authority = p.authority.replace(/\/+$/, "");
     let outcome;
     const isRedirect = (u) => u.startsWith(p.resource.redirectUri);
     const capture = (u) => {
       if (outcome || !isRedirect(u)) return;
       const sp = new URL(u).searchParams;
-      if (sp.get("state") !== state) {
-        outcome = { category: "page_changed" };
-        return;
-      }
-      const err = sp.get("error");
-      const code = sp.get("code");
-      const desc = sp.get("error_description") ?? "";
-      outcome = err || !code ? { category: mapAuthError(err ?? "", desc), detail: `redirect error ${clip(err, 40)}${desc.match(AADSTS) ? ` ${desc.match(AADSTS)[0]}` : ""}` } : { code };
+      outcome = sp.get("state") !== state ? { category: "page_changed" } : read(sp);
     };
     const matcher = (u) => isRedirect(u.href);
     const handler = async (route) => {
@@ -37936,13 +38204,12 @@ var SignInBrowser = class _SignInBrowser {
     context.on("request", onRequest);
     const page = await context.newPage();
     try {
-      const result2 = await this.drive(page, url2, new URL(authority).host, p, () => outcome);
+      const result2 = await this.drive(page, url2, new URL(authority).host, p, () => outcome, acceptConsent);
       if ("category" in result2) {
         const help = result2.category === "needs_consent" ? consentHelp(authority, p.tenant, p.resource) : void 0;
         throw new SignInError(result2.category, result2.detail, help);
       }
-      this.signedIn.add(user);
-      return { code: result2.code, verifier };
+      return result2;
     } catch (e) {
       if (e instanceof BrokerError) throw e;
       throw new SignInError("page_changed", `${await describe3(page)} (an expected button or field did not respond)`);
@@ -37954,7 +38221,7 @@ var SignInBrowser = class _SignInBrowser {
       });
     }
   }
-  async drive(page, url2, authorityHost, p, outcome) {
+  async drive(page, url2, authorityHost, p, outcome, acceptConsent) {
     const deadline = Date.now() + this.overallMs;
     const left = () => Math.max(0, Math.min(this.stepMs, deadline - Date.now()));
     page.setDefaultTimeout(this.stepMs);
@@ -37992,7 +38259,12 @@ var SignInBrowser = class _SignInBrowser {
       });
       switch (state) {
         case "consent":
-          return { category: "needs_consent" };
+          if (!acceptConsent) return { category: "needs_consent" };
+          if (!onAuthority(page, authorityHost)) return { category: "federated", detail: await describe3(page) };
+          await page.locator(SEL.next).first().click();
+          break;
+        case "needs_admin":
+          return { category: "consent_not_allowed" };
         case "federated":
           return { category: "federated", detail: await describe3(page) };
         case "proof_up":
@@ -38029,7 +38301,7 @@ var SignInBrowser = class _SignInBrowser {
           await page.locator(SEL.back).first().click();
           break;
         case "account_tile":
-          await page.locator(`[data-test-id=${JSON.stringify(p.username)}]`).first().click();
+          await page.locator(accountTile(p.username)).first().click();
           break;
       }
     }
@@ -38095,10 +38367,36 @@ function assertShowable(action) {
     );
   }
 }
+function isCutList(v) {
+  return !!v && typeof v === "object" && v.truncated === true && Array.isArray(v.items);
+}
+function makeConsentApprover(deps) {
+  return async (r) => {
+    const tenant = escapeForDisplay(r.tenant === r.alias ? r.alias : `${r.alias} (${r.tenant})`);
+    const action = deps.redactor.scrub(
+      `Approve the Microsoft app "${escapeForDisplay(r.appName)}" for the whole organisation (admin consent), so the broker can sign in with it. It stays approved in this tenant until an admin removes it.
+Permissions:
+${r.scopes.map((s) => `- ${escapeForDisplay(s)}`).join("\n")}`
+    );
+    deps.audit.write({ type: "consent_requested", tenant: r.alias, detail: r.appName });
+    let ok = false;
+    if (action.length <= MAX_ACTION) {
+      try {
+        ok = await deps.confirm({ tenant, account: escapeForDisplay(r.account), action });
+      } catch (e) {
+        deps.audit.write({ type: "error", tenant: r.alias, detail: `consent dialog failed: ${r.appName}` });
+        throw e;
+      }
+    }
+    deps.audit.write({ type: ok ? "consent_approved" : "consent_denied", tenant: r.alias, detail: r.appName });
+    return ok;
+  };
+}
 var Broker = class {
   constructor(deps) {
     this.deps = deps;
   }
+  deps;
   listTenants() {
     return this.run(void 0, async () => ({ tenants: await this.deps.vault.listTenants() }));
   }
@@ -38126,22 +38424,48 @@ var Broker = class {
       const detail = `${method} ${path.split("?")[0]}`;
       if (action !== void 0) await this.approve(tenant, cred, upn, action, detail);
       this.deps.audit.write({ type: "call", tenant, detail });
-      return graphRequest(this.deps.fetch, token, { method, path, body, apiVersion });
+      const res = await graphRequest(this.deps.fetch, token, { method, path, body, apiVersion });
+      return { status: res.status, body: capResult(res.body) };
     });
   }
-  exoCmdlet(tenant, cmdlet, parameters) {
+  /** Runs one cmdlet of one admin service (exchange, compliance, teams, sharepoint). */
+  adminCmdlet(tenant, service, cmdlet, parameters, opts = {}) {
     return this.run(tenant, async () => {
+      const checked = checkService(service, opts.site ?? void 0);
       validateCmdlet(cmdlet);
       const params = validateParameters(parameters ?? {});
       assertNoForbiddenCommon(params);
-      const action = isCmdletRead(cmdlet) ? void 0 : cmdletAction(cmdlet, params);
+      const select = validateSelect(opts.select ?? void 0);
+      const first = validateFirst(opts.first ?? void 0);
+      const where = checked.site ? `${checked.service} ${checked.site}` : checked.service;
+      const action = isCmdletRead(cmdlet, params) ? void 0 : `[${escapeForDisplay(where)}] ${cmdletAction(cmdlet, params)}`;
       if (action !== void 0) assertShowable(action);
       const cred = await this.deps.vault.getCredential(tenant);
-      const { token, upn } = await this.deps.tokens.getAccessToken(cred, EXO_RESOURCE);
-      if (action !== void 0) await this.approve(tenant, cred, upn, action, cmdlet);
-      this.deps.audit.write({ type: "call", tenant, detail: cmdlet });
-      const result2 = await runCmdlet(this.deps.exo, { token, upn, organization: cred.tenant, cmdlet, parameters: params });
-      return { result: result2 };
+      const plan = planFor(checked.service, cred, checked.site);
+      const { token, upn } = await this.deps.tokens.getAccessToken(cred, plan.primary);
+      const graphToken = plan.graph ? (await this.deps.tokens.getAccessToken(cred, plan.graph)).token : void 0;
+      const detail = `${where} ${cmdlet}`;
+      if (action !== void 0) await this.approve(tenant, cred, upn, action, detail);
+      this.deps.audit.write({ type: "call", tenant, detail });
+      const out = await runAdminCmdlet(this.deps.ps, {
+        service: plan.service,
+        shell: plan.shell,
+        token,
+        ...graphToken !== void 0 ? { graphToken } : {},
+        upn,
+        organization: cred.tenant,
+        ...plan.url !== void 0 ? { url: plan.url } : {},
+        cmdlet,
+        parameters: params,
+        ...select ? { select } : {},
+        ...first !== void 0 ? { first } : {}
+      });
+      const capped = capResult(out.result, { total: out.total });
+      const warnings = out.warnings ? { warnings: out.warnings } : {};
+      if (isCutList(capped)) {
+        return { result: capped.items, truncated: true, totalItems: capped.totalItems, shownItems: capped.shownItems, note: capped.note, ...warnings };
+      }
+      return { result: capped, ...out.note ? { note: out.note } : {}, ...warnings };
     });
   }
   disconnect(tenant) {
@@ -38280,56 +38604,57 @@ function claims(jwt2) {
   }
 }
 var str = (v) => typeof v === "string" && v ? v : void 0;
+var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
 var TokenManager = class {
   constructor(deps) {
     this.deps = deps;
     this.now = deps.now ?? Date.now;
   }
+  deps;
+  /** alias -> resource key -> entry. Nested so an alias containing ":" cannot collide with another. */
   cache = /* @__PURE__ */ new Map();
   inflight = /* @__PURE__ */ new Map();
+  /** "alias, app" pairs whose consent the user declined; not asked again until disconnect. */
+  declined = /* @__PURE__ */ new Set();
   browserP;
   now;
   getAccessToken(cred, resource) {
-    const key = `${cred.alias}:${resource.key}`;
+    const key = JSON.stringify([cred.alias, resource.key]);
     const running = this.inflight.get(key);
     if (running) return running;
-    const p = this.acquire(key, cred, resource).finally(() => this.inflight.delete(key));
+    const p = this.acquire(cred, resource).finally(() => this.inflight.delete(key));
     this.inflight.set(key, p);
     return p;
   }
   async drop(alias) {
     if (alias === void 0) {
       this.cache.clear();
+      this.declined.clear();
       const bp = this.browserP;
       this.browserP = void 0;
       const browser = bp ? await bp.catch(() => void 0) : void 0;
       await browser?.close();
       return;
     }
-    for (const k of [...this.cache.keys()]) if (k.startsWith(`${alias}:`)) this.cache.delete(k);
+    this.cache.delete(alias);
+    for (const k of [...this.declined]) if (JSON.parse(k)[0] === alias) this.declined.delete(k);
   }
-  async acquire(key, cred, resource) {
-    const cached2 = this.cache.get(key);
+  async acquire(cred, resource) {
+    const entries = this.cache.get(cred.alias);
+    const cached2 = entries?.get(resource.key);
     if (cached2 && cached2.expiresAt - this.now() > REFRESH_MARGIN_MS) {
       return { token: cached2.token, upn: cached2.upn };
     }
-    if (cached2?.refreshToken) {
+    const refreshToken = cached2?.refreshToken ?? [...entries?.values() ?? []].find((e) => e.clientId === resource.clientId && e.refreshToken)?.refreshToken;
+    if (refreshToken) {
       try {
-        return await this.store(key, cred, await this.refresh(cred, resource, cached2.refreshToken));
+        return this.store(cred, resource, await this.refresh(cred, resource, refreshToken));
       } catch (e) {
         if (e instanceof BrokerError && e.code === "wrong_account") throw e;
-        this.cache.delete(key);
+        entries?.delete(resource.key);
       }
     }
-    const browser = await this.browser();
-    const { code, verifier } = await browser.authorize({
-      authority: this.deps.authority,
-      tenant: cred.tenant,
-      resource,
-      username: cred.username,
-      password: cred.password,
-      totpSeed: cred.totpSeed
-    });
+    const { code, verifier } = await this.signIn(cred, resource);
     const body = new URLSearchParams({
       client_id: resource.clientId,
       grant_type: "authorization_code",
@@ -38338,7 +38663,51 @@ var TokenManager = class {
       code_verifier: verifier,
       scope: resource.scopes.join(" ")
     });
-    return this.store(key, cred, await this.post(cred.tenant, body));
+    return this.store(cred, resource, await this.post(cred.tenant, resource, body));
+  }
+  /** Browser sign-in. If Microsoft wants consent for the app and the user says Yes, grants it and signs in again. */
+  async signIn(cred, resource) {
+    const browser = await this.browser();
+    const params = {
+      authority: this.deps.authority,
+      tenant: cred.tenant,
+      resource,
+      username: cred.username,
+      password: cred.password,
+      totpSeed: cred.totpSeed
+    };
+    try {
+      return await browser.authorize(params);
+    } catch (e) {
+      const { approveConsent, audit } = this.deps;
+      const declinedKey = JSON.stringify([cred.alias, resource.clientId]);
+      if (!(e instanceof SignInError) || e.category !== "needs_consent" || !approveConsent || this.declined.has(declinedKey)) throw e;
+      let approved;
+      try {
+        approved = await approveConsent({
+          alias: cred.alias,
+          tenant: cred.tenant,
+          account: cred.username,
+          appName: resource.appName,
+          scopes: permissionScopes(resource)
+        });
+      } catch {
+        throw e;
+      }
+      if (!approved) {
+        this.declined.add(declinedKey);
+        throw e;
+      }
+      try {
+        await browser.grantConsent(params);
+      } catch (g) {
+        audit?.write({ type: "consent_failed", tenant: cred.alias, detail: `${resource.appName}: ${g instanceof SignInError ? g.category : "error"}` });
+        throw g;
+      }
+      audit?.write({ type: "consent_granted", tenant: cred.alias, detail: resource.appName });
+      await sleep2(this.deps.consentWaitMs ?? 3e3);
+      return browser.authorize(params);
+    }
   }
   /** Launches the sign-in browser once; a failed launch is forgotten so the next call retries. */
   browser() {
@@ -38354,6 +38723,7 @@ var TokenManager = class {
   refresh(cred, resource, refreshToken) {
     return this.post(
       cred.tenant,
+      resource,
       new URLSearchParams({
         client_id: resource.clientId,
         grant_type: "refresh_token",
@@ -38363,15 +38733,20 @@ var TokenManager = class {
       refreshToken
     );
   }
-  store(key, cred, entry) {
+  store(cred, resource, entry) {
+    let entries = this.cache.get(cred.alias);
     if (entry.upn.toLowerCase() !== cred.username.toLowerCase()) {
-      this.cache.delete(key);
+      entries?.delete(resource.key);
       throw new BrokerError("wrong_account", "Signed in as a different account than the Bitwarden item.");
     }
-    this.cache.set(key, entry);
+    if (!entries) {
+      entries = /* @__PURE__ */ new Map();
+      this.cache.set(cred.alias, entries);
+    }
+    entries.set(resource.key, entry);
     return { token: entry.token, upn: entry.upn };
   }
-  async post(tenant, body, previousRefresh) {
+  async post(tenant, resource, body, previousRefresh) {
     let res;
     try {
       res = await this.deps.fetch(`${this.deps.authority}/${tenant}/oauth2/v2.0/token`, {
@@ -38400,7 +38775,7 @@ var TokenManager = class {
     const ac = claims(accessToken);
     const upn = str(idc.preferred_username) ?? str(ac.upn) ?? str(ac.unique_name) ?? "";
     const expiresIn = typeof json2.expires_in === "number" ? json2.expires_in : Number(json2.expires_in) || 3600;
-    return { token: accessToken, refreshToken: refreshToken ?? previousRefresh, upn, expiresAt: this.now() + expiresIn * 1e3 };
+    return { clientId: resource.clientId, token: accessToken, refreshToken: refreshToken ?? previousRefresh, upn, expiresAt: this.now() + expiresIn * 1e3 };
   }
 };
 
@@ -38468,6 +38843,7 @@ var BwClient = class {
   constructor(run) {
     this.run = run;
   }
+  run;
   async status() {
     const r = await this.exec(["status"], {}, []);
     const parsed = parseJson(r.stdout);
@@ -38541,12 +38917,12 @@ function isObject2(v) {
 function itemName(item) {
   return isObject2(item) ? str2(item.name) : void 0;
 }
-function tenantField(item) {
+function customField(item, name) {
   if (!Array.isArray(item.fields)) return void 0;
   for (const f of item.fields) {
-    if (isObject2(f) && typeof f.name === "string" && f.name.toLowerCase() === "tenant") {
-      const v = str2(f.value);
-      if (v) return v.trim() || void 0;
+    if (isObject2(f) && typeof f.name === "string" && f.name.toLowerCase() === name) {
+      const v = str2(f.value)?.trim();
+      if (v) return v;
     }
   }
   return void 0;
@@ -38573,6 +38949,7 @@ var Vault = class {
     this.deps = deps;
     this.now = deps.now ?? Date.now;
   }
+  deps;
   state = null;
   inflight = null;
   lastUse = 0;
@@ -38591,7 +38968,7 @@ var Vault = class {
     const username = str2(login.username);
     const password = str2(login.password);
     const totpSeed = str2(login.totp);
-    const tenant = tenantField(item);
+    const tenant = customField(item, "tenant");
     const missing = [];
     if (!username) missing.push("username");
     if (!password) missing.push("password");
@@ -38603,7 +38980,8 @@ var Vault = class {
         `Bitwarden item "${alias}" is missing: ${missing.join(", ")}. Add the missing field(s) to the item and try again.`
       );
     }
-    return { alias, username, password, totpSeed, tenant };
+    const sharepoint = customField(item, "sharepoint");
+    return { alias, username, password, totpSeed, tenant, ...sharepoint ? { sharepoint } : {} };
   }
   async lock() {
     if (this.inflight) await this.inflight.catch(() => void 0);
@@ -38777,13 +39155,13 @@ function createServer(broker) {
   );
   server.registerTool(
     "connect",
-    { description: "Sign in to a tenant's Microsoft Graph with its stored admin login and return the signed-in account.", inputSchema: { tenant } },
+    { description: "Sign in to a tenant's Microsoft Graph with its stored admin login and return the signed-in account. Optional: graph_request and admin_cmdlet sign in by themselves.", inputSchema: { tenant } },
     async (a) => result(await broker.connect(a.tenant))
   );
   server.registerTool(
     "graph_request",
     {
-      description: `Call Microsoft Graph (https://graph.microsoft.com) for a tenant; GET is a read. ${APPROVAL}`,
+      description: `Call Microsoft Graph (https://graph.microsoft.com) for a tenant; GET is a read. Always use $select and $top (and $filter) to keep results small. ${APPROVAL}`,
       inputSchema: {
         tenant,
         method: external_exports.enum(["GET", "POST", "PATCH", "PUT", "DELETE"]),
@@ -38795,21 +39173,30 @@ function createServer(broker) {
     async (a) => result(await broker.graphRequest(a.tenant, a.method, a.path, a.body, a.api_version))
   );
   server.registerTool(
-    "exo_cmdlet",
+    "admin_cmdlet",
     {
-      description: `Run one Exchange Online PowerShell cmdlet for a tenant; Get- cmdlets are reads. ${APPROVAL}`,
+      description: `Run one PowerShell admin cmdlet for a tenant: service "exchange" (Exchange Online), "compliance" (Security & Compliance / Purview), "teams" (Microsoft Teams) or "sharepoint" (PnP PowerShell). Get- cmdlets are reads. Always pass select (the properties you need) and first (how many items) to keep results small. ${APPROVAL}`,
       inputSchema: {
         tenant,
-        cmdlet: external_exports.string().describe("Exchange Online cmdlet name, e.g. Get-Mailbox"),
-        parameters: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe('Named parameters, e.g. {"Identity":"user@x.com"}')
+        service: external_exports.enum(SERVICES),
+        cmdlet: external_exports.string().describe("Cmdlet name, e.g. Get-Mailbox, Get-RetentionCompliancePolicy, Get-CsTeamsMeetingPolicy, Get-PnPTenantSite"),
+        parameters: external_exports.record(external_exports.string(), external_exports.unknown()).nullish().describe('Named parameters, e.g. {"Identity":"user@x.com"}'),
+        select: external_exports.array(external_exports.string()).nullish().describe('Property names to return, e.g. ["DisplayName","PrimarySmtpAddress"]; dotted paths allowed'),
+        first: external_exports.number().int().min(1).max(1e3).nullish().describe("Return at most this many items (default 200); totalItems still says how many the cmdlet returned"),
+        site: external_exports.string().nullish().describe("sharepoint only: site URL to work in, e.g. https://contoso.sharepoint.com/sites/Finance; default is the admin site")
       }
     },
-    async (a) => result(await broker.exoCmdlet(a.tenant, a.cmdlet, a.parameters))
+    // Some models send null for options they are not using; treat it as absent.
+    async (a) => result(await broker.adminCmdlet(a.tenant, a.service, a.cmdlet, a.parameters ?? void 0, {
+      select: a.select ?? void 0,
+      first: a.first ?? void 0,
+      site: a.site ?? void 0
+    }))
   );
   server.registerTool(
     "disconnect",
-    { description: "Forget the cached Microsoft sign-in for one tenant, or for all tenants if none is given.", inputSchema: { tenant: tenant.optional() } },
-    async (a) => result(await broker.disconnect(a.tenant))
+    { description: "Forget the cached Microsoft sign-in for one tenant, or for all tenants if none is given.", inputSchema: { tenant: tenant.nullish() } },
+    async (a) => result(await broker.disconnect(a.tenant ?? void 0))
   );
   server.registerTool(
     "lock",
@@ -38835,14 +39222,17 @@ async function main() {
     authority: "https://login.microsoftonline.com",
     getBrowser: () => SignInBrowser.launch({ channel: "msedge", headless: !config2.showSignInWindow }),
     fetch: globalThis.fetch,
-    redactor
+    redactor,
+    // Microsoft wants an app approved for the tenant: ask the user, never decide here.
+    approveConsent: makeConsentApprover({ confirm: (r) => confirmAction(r), audit, redactor }),
+    audit
   });
   const broker = new Broker({
     vault,
     tokens,
     confirm: (r) => confirmAction(r),
     fetch: globalThis.fetch,
-    exo: defaultPsRunner(),
+    ps: defaultPsRunner(),
     audit,
     redactor,
     config: config2

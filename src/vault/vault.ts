@@ -9,6 +9,8 @@ export interface Credential {
   password: string;
   totpSeed: string;
   tenant: string;
+  /** Optional: the tenant's SharePoint name ("contoso" in contoso.sharepoint.com) when it differs from the tenant domain. */
+  sharepoint?: string;
 }
 
 export interface VaultDeps {
@@ -41,12 +43,13 @@ function itemName(item: unknown): string | undefined {
   return isObject(item) ? str(item.name) : undefined;
 }
 
-function tenantField(item: Record<string, unknown>): string | undefined {
+/** Value of a custom field by name (case-insensitive), trimmed; undefined if absent or empty. */
+function customField(item: Record<string, unknown>, name: string): string | undefined {
   if (!Array.isArray(item.fields)) return undefined;
   for (const f of item.fields) {
-    if (isObject(f) && typeof f.name === 'string' && f.name.toLowerCase() === 'tenant') {
-      const v = str(f.value);
-      if (v) return v.trim() || undefined;
+    if (isObject(f) && typeof f.name === 'string' && f.name.toLowerCase() === name) {
+      const v = str(f.value)?.trim();
+      if (v) return v;
     }
   }
   return undefined;
@@ -99,7 +102,7 @@ export class Vault {
     const username = str(login.username);
     const password = str(login.password);
     const totpSeed = str(login.totp);
-    const tenant = tenantField(item);
+    const tenant = customField(item, 'tenant');
     const missing: string[] = [];
     if (!username) missing.push('username');
     if (!password) missing.push('password');
@@ -111,7 +114,8 @@ export class Vault {
         `Bitwarden item "${alias}" is missing: ${missing.join(', ')}. Add the missing field(s) to the item and try again.`,
       );
     }
-    return { alias, username: username!, password: password!, totpSeed: totpSeed!, tenant: tenant! };
+    const sharepoint = customField(item, 'sharepoint');
+    return { alias, username: username!, password: password!, totpSeed: totpSeed!, tenant: tenant!, ...(sharepoint ? { sharepoint } : {}) };
   }
 
   async lock(): Promise<void> {

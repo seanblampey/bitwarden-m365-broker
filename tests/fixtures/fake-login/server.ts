@@ -26,6 +26,12 @@ export interface FakeLoginOpts {
   users?: Record<string, string>;
   /** Echo a state that does not match the request's. */
   wrongState?: boolean;
+  /** Admin consent: the signed-in account may not approve apps ("Need admin approval" page). */
+  notAdmin?: boolean;
+  /** Admin consent: redirect straight back with this AADSTS error. */
+  adminConsentError?: string;
+  /** Show "Pick an account" whenever a session exists, even without prompt=select_account. */
+  alwaysPicker?: boolean;
 }
 
 export interface FakeLogin {
@@ -34,9 +40,12 @@ export interface FakeLogin {
   acceptPosted: () => boolean;
   lastOtc: () => string | undefined;
   passwordPageViews: () => number;
+  /** How many times Accept was posted on the admin-consent page, and the last scope it was asked for. */
+  adminAccepts: () => number;
+  lastAdminConsentScope: () => string | undefined;
 }
 
-interface Flow { redirectUri: string; hint: string; state: string; user?: string }
+interface Flow { redirectUri: string; hint: string; state: string; user?: string; clientId?: string; adminConsent?: boolean }
 
 const page = (body: string) =>
   `<!doctype html><html><body>${body}</body></html>`;
@@ -55,6 +64,10 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
   let otc: string | undefined;
   let pwViews = 0;
   let port = 0;
+  let adminAccepts = 0;
+  let adminScope: string | undefined;
+  /** Client IDs an admin has approved for the organisation; `consent` no longer applies to them. */
+  const granted = new Set<string>();
 
   const send = (res: ServerResponse, html: string, headers: Record<string, string> = {}) => {
     res.writeHead(200, { 'content-type': 'text/html', ...headers });
@@ -87,8 +100,13 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
       '<input type="checkbox" id="KmsiCheckboxField"><button type="submit" name="kmsi" value="no" id="idBtn_Back">No</button><button type="submit" name="kmsi" value="yes" id="idSIButton9">Yes</button>')));
     afterKmsi(res, id, f);
   };
+  const adminConsentPage = (id: string) =>
+    opts.notAdmin
+      ? page('<div id="loginHeader" role="heading">Need admin approval</div><p>This app needs permission that only an admin can grant.</p>')
+      : page(`<div role="heading">Permissions requested</div><p>Review for your organization</p><form method="post" action="/adminconsent/accept"><input type="hidden" name="flow" value="${id}"><input type="button" id="idBtn_Back" value="Cancel"><input type="submit" id="idSIButton9" value="Accept"></form>`);
   const afterKmsi = (res: ServerResponse, id: string, f: Flow) => {
-    if (opts.consent) return redirect(res, `/Consent/Set?flow=${id}`);
+    if (f.adminConsent) return send(res, adminConsentPage(id));
+    if (opts.consent && !granted.has(f.clientId ?? '')) return redirect(res, `/Consent/Set?flow=${id}`);
     finish(res, f);
   };
 
@@ -97,8 +115,38 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
     const cookie = req.headers.cookie ?? '';
     const path = u.pathname;
 
+    if (req.method === 'GET' && /\/v2\.0\/adminconsent$/.test(path)) {
+      const f: Flow = {
+        redirectUri: u.searchParams.get('redirect_uri') ?? '', hint: '', state: u.searchParams.get('state') ?? '',
+        clientId: u.searchParams.get('client_id') ?? '', adminConsent: true,
+      };
+      adminScope = u.searchParams.get('scope') ?? undefined;
+      if (opts.adminConsentError) {
+        const q = new URLSearchParams({ error: 'access_denied', error_description: `${opts.adminConsentError}: not allowed`, state: state(f) });
+        return redirect(res, `${f.redirectUri}?${q}`);
+      }
+      const id = randomBytes(8).toString('hex');
+      flows.set(id, f);
+      const session = decodeURIComponent(/fakesession=([^;]*)/.exec(cookie)?.[1] ?? '').split(',').filter(Boolean);
+      if (session.length) return send(res, adminConsentPage(id));
+      return send(res, page(form(id, 'user', '<input name="loginfmt" type="email"><input type="submit" id="idSIButton9" value="Next">')));
+    }
+    if (req.method === 'POST' && path === '/adminconsent/accept') {
+      adminAccepts++;
+      const f = flows.get((await body(req)).get('flow') ?? '');
+      if (!f) return send(res, page('gone'));
+      granted.add(f.clientId ?? '');
+      const q = new URLSearchParams({ admin_consent: 'True', tenant: 'contoso.com', state: state(f) });
+      // Like Entra, the admin who just signed in to approve the app now has a session.
+      if (f.user) sessionUsers = [...new Set([...sessionUsers, f.user])];
+      const cookieHeader: Record<string, string> = sessionUsers.length ? { 'set-cookie': `fakesession=${encodeURIComponent(sessionUsers.join(','))}; Path=/; HttpOnly` } : {};
+      return redirect(res, `${f.redirectUri}?${q}`, cookieHeader);
+    }
     if (req.method === 'GET' && /\/oauth2\/v2\.0\/authorize$/.test(path)) {
-      const f: Flow = { redirectUri: u.searchParams.get('redirect_uri') ?? '', hint: u.searchParams.get('login_hint') ?? '', state: u.searchParams.get('state') ?? '' };
+      const f: Flow = {
+        redirectUri: u.searchParams.get('redirect_uri') ?? '', hint: u.searchParams.get('login_hint') ?? '', state: u.searchParams.get('state') ?? '',
+        clientId: u.searchParams.get('client_id') ?? '',
+      };
       if (opts.error) {
         const q = new URLSearchParams({ error: 'access_denied', error_description: `${opts.error}: blocked for ${f.hint}`, state: state(f) });
         return redirect(res, `${f.redirectUri}?${q}`);
@@ -107,7 +155,7 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
       if (opts.unknownPage) return send(res, page('<h1>Something new</h1><p>Unrecognised page.</p>'));
       if (opts.aadErrorPage) return send(res, page(`<div id="loginHeader" role="heading">Sign in</div><p>Sorry, but we're having trouble signing you in.</p><p>${opts.aadErrorPage}: User account '${f.hint}' does not exist in tenant.</p>`));
       if (opts.proofUp) return send(res, page('<div id="loginHeader" role="heading">More information required</div><input type="submit" id="idSubmit_ProofUp_Redirect" value="Next">'));
-      if (opts.consentHeading) return send(res, page('<div role="heading">Permissions requested</div><input type="submit" id="idSIButton9" value="Accept" formaction="/consent-accept">'));
+      if (opts.consentHeading && !granted.has(f.clientId ?? '')) return send(res, page('<div role="heading">Permissions requested</div><form method="post" action="/consent/accept"><input type="submit" id="idSIButton9" value="Accept"></form>'));
       const id = randomBytes(8).toString('hex');
       flows.set(id, f);
       const session = decodeURIComponent(/fakesession=([^;]*)/.exec(cookie)?.[1] ?? '').split(',').filter(Boolean);
@@ -115,12 +163,13 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
       // otherwise (pessimistically) the first signed-in account. With prompt=select_account and
       // any session, real Entra shows "Pick an account" (signed-in tiles plus "Use another account"),
       // even when the hinted account is not among them; the login page appears only with no session.
-      if (session.length && u.searchParams.get('prompt') !== 'select_account') {
+      if (session.length && u.searchParams.get('prompt') !== 'select_account' && !opts.alwaysPicker) {
         f.user = session.includes(f.hint) ? f.hint : session[0];
-        return finish(res, f);
+        return afterKmsi(res, id, f);
       }
       if (session.length) {
-        const tiles = session.map((s) => `<button type="submit" name="pick" value="${s}" data-test-id="${s}">${s}</button>`).join('');
+        // Entra writes the address in lower case in the tile's data-test-id.
+        const tiles = session.map((s) => `<button type="submit" name="pick" value="${s}" data-test-id="${s.toLowerCase()}">${s}</button>`).join('');
         return send(res, page(form(id, 'pick', `${tiles}<div id="otherTile">Use another account</div>`)));
       }
       return send(res, page(form(id, 'user', '<input name="loginfmt" type="email"><input type="submit" id="idSIButton9" value="Next">')));
@@ -182,5 +231,7 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
     acceptPosted: () => accepted,
     lastOtc: () => otc,
     passwordPageViews: () => pwViews,
+    adminAccepts: () => adminAccepts,
+    lastAdminConsentScope: () => adminScope,
   };
 }

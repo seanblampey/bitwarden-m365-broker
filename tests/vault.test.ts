@@ -105,6 +105,12 @@ describe('Vault', () => {
     expect(e.message).toContain('tenant');
     expect(e.message).not.toContain('SEEDADATUM');
   });
+  it('reads the optional sharepoint field', async () => {
+    const withSp: BwItem = { ...good, id: '9', name: 'sp', fields: [{ name: 'tenant', value: 'contoso.com' }, { name: 'SharePoint', value: ' contosoltd ' }] };
+    const { vault } = setup({ items: [withSp, good] });
+    expect((await vault.getCredential('sp')).sharepoint).toBe('contosoltd');
+    expect((await vault.getCredential('contoso-admin')).sharepoint).toBeUndefined();
+  });
   it('gives every item a unique alias when Bitwarden names repeat', async () => {
     const mk = (id: string, name: string, username: string, tenant: string): BwItem =>
       ({ id, name, login: { username, password: `pw-${id}`, totp: 'JBSWY3DPEHPK3PXP' }, fields: [{ name: 'tenant', value: tenant }] });

@@ -1,6 +1,6 @@
 {
   "name": "bitwarden-m365-broker",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "keywords": [
     "pi-package",
     "claude-code-plugin",
@@ -25,7 +25,7 @@
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/node": "^26.6.6",
-    "esbuild": "^0.25.10",
+    "esbuild": "^0.28.2",
     "otpauth": "^9.6.0",
     "playwright-core": "^1.65.1",
     "tsx": "^4.23.15",

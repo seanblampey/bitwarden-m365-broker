@@ -1,13 +1,17 @@
 import type { AuditLog } from './audit.js';
-import { buildGraphUrl, isCmdletRead, isGraphRead, validateCmdlet, validateParameters, type GraphMethod } from './classify.js';
+import { assertNoForbiddenCommon, runAdminCmdlet, type PsRunner } from './admin/runner.js';
+import { checkService, planFor } from './admin/services.js';
+import {
+  buildGraphUrl, isCmdletRead, isGraphRead, validateCmdlet, validateFirst, validateParameters, validateSelect, type GraphMethod,
+} from './classify.js';
 import type { BrokerConfig } from './config.js';
 import { BrokerError } from './errors.js';
-import { assertNoForbiddenCommon, runCmdlet, type PsRunner } from './exo.js';
 import { graphRequest } from './graph.js';
 import type { Redactor } from './redact.js';
-import { EXO_RESOURCE, graphResource } from './auth/resources.js';
+import { capResult } from './shape.js';
+import { graphResource } from './auth/resources.js';
 import { SignInError } from './auth/signin.js';
-import type { TokenManager } from './auth/tokens.js';
+import type { ConsentRequest, TokenManager } from './auth/tokens.js';
 import type { Credential, Vault } from './vault/vault.js';
 import type { ApprovalRequest } from './win/dialogs.js';
 
@@ -16,7 +20,8 @@ export interface BrokerDeps {
   tokens: Pick<TokenManager, 'getAccessToken' | 'drop'>;
   confirm: (r: ApprovalRequest) => Promise<boolean>;
   fetch: typeof fetch;
-  exo: PsRunner;
+  /** Runs the admin PowerShell script (Windows PowerShell or PowerShell 7). */
+  ps: PsRunner;
   audit: Pick<AuditLog, 'write'>;
   redactor: Redactor;
   config: BrokerConfig;
@@ -90,6 +95,50 @@ function assertShowable(action: string): void {
   }
 }
 
+/** Options of admin_cmdlet that shape the result or pick the SharePoint site. Validated by the broker. */
+export interface AdminCmdletOptions {
+  select?: unknown;
+  first?: unknown;
+  site?: unknown;
+}
+
+function isCutList(v: unknown): v is { truncated: true; totalItems: number; shownItems: number; note: string; items: unknown[] } {
+  return !!v && typeof v === 'object' && (v as { truncated?: unknown }).truncated === true && Array.isArray((v as { items?: unknown }).items);
+}
+
+/**
+ * Builds the question asked when Microsoft wants an app approved for a tenant: a Yes/No dialog naming
+ * the app, the tenant and every permission. Anything but an explicit Yes (No, timeout, a request too long
+ * to show in full) is a No. If the dialog cannot be shown it throws, so that is not mistaken for an answer.
+ */
+export function makeConsentApprover(deps: {
+  confirm: (r: ApprovalRequest) => Promise<boolean>;
+  audit: Pick<AuditLog, 'write'>;
+  redactor: Redactor;
+}): (r: ConsentRequest) => Promise<boolean> {
+  return async (r) => {
+    const tenant = escapeForDisplay(r.tenant === r.alias ? r.alias : `${r.alias} (${r.tenant})`);
+    const action = deps.redactor.scrub(
+      `Approve the Microsoft app "${escapeForDisplay(r.appName)}" for the whole organisation (admin consent), `
+        + 'so the broker can sign in with it. It stays approved in this tenant until an admin removes it.\n'
+        + `Permissions:\n${r.scopes.map((s) => `- ${escapeForDisplay(s)}`).join('\n')}`,
+    );
+    deps.audit.write({ type: 'consent_requested', tenant: r.alias, detail: r.appName });
+    let ok = false;
+    if (action.length <= MAX_ACTION) {
+      try {
+        ok = await deps.confirm({ tenant, account: escapeForDisplay(r.account), action });
+      } catch (e) {
+        // Not an answer: the box could not be shown. The caller may ask again later.
+        deps.audit.write({ type: 'error', tenant: r.alias, detail: `consent dialog failed: ${r.appName}` });
+        throw e;
+      }
+    }
+    deps.audit.write({ type: ok ? 'consent_approved' : 'consent_denied', tenant: r.alias, detail: r.appName });
+    return ok;
+  };
+}
+
 /** Ties vault, sign-in, approval and executors together. Every method returns redacted JSON text. */
 export class Broker {
   constructor(private readonly deps: BrokerDeps) {}
@@ -130,23 +179,59 @@ export class Broker {
       const detail = `${method} ${path.split('?')[0]}`;
       if (action !== undefined) await this.approve(tenant, cred, upn, action, detail);
       this.deps.audit.write({ type: 'call', tenant, detail });
-      return graphRequest(this.deps.fetch, token, { method, path, body, apiVersion });
+      const res = await graphRequest(this.deps.fetch, token, { method, path, body, apiVersion });
+      return { status: res.status, body: capResult(res.body) };
     });
   }
 
-  exoCmdlet(tenant: string, cmdlet: string, parameters?: Record<string, unknown>): Promise<string> {
+  /** Runs one cmdlet of one admin service (exchange, compliance, teams, sharepoint). */
+  adminCmdlet(
+    tenant: string,
+    service: string,
+    cmdlet: string,
+    parameters?: Record<string, unknown>,
+    opts: AdminCmdletOptions = {},
+  ): Promise<string> {
     return this.run(tenant, async () => {
+      // Everything that can be checked without the vault is checked first.
+      const checked = checkService(service, opts.site ?? undefined);
       validateCmdlet(cmdlet);
       const params = validateParameters(parameters ?? {});
       assertNoForbiddenCommon(params);
-      const action = isCmdletRead(cmdlet) ? undefined : cmdletAction(cmdlet, params);
+      // Some models send null for options they are not using.
+      const select = validateSelect(opts.select ?? undefined);
+      const first = validateFirst(opts.first ?? undefined);
+      const where = checked.site ? `${checked.service} ${checked.site}` : checked.service;
+      const action = isCmdletRead(cmdlet, params) ? undefined : `[${escapeForDisplay(where)}] ${cmdletAction(cmdlet, params)}`;
       if (action !== undefined) assertShowable(action);
+
       const cred = await this.deps.vault.getCredential(tenant);
-      const { token, upn } = await this.deps.tokens.getAccessToken(cred, EXO_RESOURCE);
-      if (action !== undefined) await this.approve(tenant, cred, upn, action, cmdlet);
-      this.deps.audit.write({ type: 'call', tenant, detail: cmdlet });
-      const result = await runCmdlet(this.deps.exo, { token, upn, organization: cred.tenant, cmdlet, parameters: params });
-      return { result };
+      // Needs the Bitwarden item: a SharePoint site must be on this tenant's own host.
+      const plan = planFor(checked.service, cred, checked.site);
+      const { token, upn } = await this.deps.tokens.getAccessToken(cred, plan.primary);
+      const graphToken = plan.graph ? (await this.deps.tokens.getAccessToken(cred, plan.graph)).token : undefined;
+      const detail = `${where} ${cmdlet}`;
+      if (action !== undefined) await this.approve(tenant, cred, upn, action, detail);
+      this.deps.audit.write({ type: 'call', tenant, detail });
+      const out = await runAdminCmdlet(this.deps.ps, {
+        service: plan.service,
+        shell: plan.shell,
+        token,
+        ...(graphToken !== undefined ? { graphToken } : {}),
+        upn,
+        organization: cred.tenant,
+        ...(plan.url !== undefined ? { url: plan.url } : {}),
+        cmdlet,
+        parameters: params,
+        ...(select ? { select } : {}),
+        ...(first !== undefined ? { first } : {}),
+      });
+      const capped = capResult(out.result, { total: out.total });
+      const warnings = out.warnings ? { warnings: out.warnings } : {};
+      if (isCutList(capped)) {
+        return { result: capped.items, truncated: true, totalItems: capped.totalItems, shownItems: capped.shownItems, note: capped.note, ...warnings };
+      }
+      return { result: capped, ...(out.note ? { note: out.note } : {}), ...warnings };
     });
   }
 
