@@ -2,16 +2,17 @@ import { chromium, type Browser, type BrowserContext, type Page, type Request, t
 import { BrokerError } from '../errors.js';
 import { randomBytes } from 'node:crypto';
 import { pkcePair, totp } from '../crypto.js';
-import type { Resource } from './resources.js';
+import { permissionScopes, type Resource } from './resources.js';
 
 export type SignInCategory =
   | 'wrong_password' | 'mfa_not_totp' | 'needs_consent' | 'conditional_access'
-  | 'federated' | 'account_locked' | 'mfa_setup_required' | 'wrong_tenant' | 'page_changed';
+  | 'federated' | 'account_locked' | 'mfa_setup_required' | 'wrong_tenant' | 'consent_not_allowed' | 'page_changed';
 
 const MESSAGES: Record<SignInCategory, string> = {
   wrong_password: 'Microsoft rejected the password for this account.',
   mfa_not_totp: 'The account does not offer an authenticator-app code (TOTP) for MFA, so the broker cannot complete sign-in.',
-  needs_consent: 'Microsoft asked for consent to the app; an administrator must grant consent first (the broker never accepts consent).',
+  needs_consent: 'Microsoft asked for consent to the app, and it has not been approved for this tenant.',
+  consent_not_allowed: 'Microsoft will not let this account approve the app for the organisation. The account needs a role that can grant admin consent (Global Administrator, Privileged Role Administrator or Cloud Application Administrator).',
   conditional_access: 'A Conditional Access policy blocked this sign-in.',
   federated: 'The account signs in through a federated identity provider, which the broker does not support.',
   account_locked: 'Microsoft reports that the account is locked or disabled.',
@@ -37,28 +38,36 @@ export class SignInError extends BrokerError {
 
 const GRAPH_PREFIX = 'https://graph.microsoft.com/';
 
+/** Microsoft's admin-consent page for one app and its permission scopes in one tenant. */
+export function adminConsentUrl(authority: string, tenant: string, resource: Resource, state?: string): string {
+  const q = new URLSearchParams({
+    client_id: resource.clientId,
+    scope: permissionScopes(resource).join(' '),
+    redirect_uri: resource.redirectUri,
+  });
+  if (state) q.set('state', state);
+  return `${authority.replace(/\/+$/, '')}/${encodeURIComponent(tenant)}/v2.0/adminconsent?${q}`;
+}
+
 /**
- * Steps for an administrator to grant consent once in this tenant, so the message tells
+ * Steps for an administrator to grant consent once in this tenant by hand, so the message tells
  * whoever reads it exactly what to do. Never includes the account name or any secret.
  */
 export function consentHelp(authority: string, tenant: string, resource: Resource): string {
-  if (resource.key === 'exo') {
-    return `To fix it for tenant ${tenant}: open Windows PowerShell yourself (not through Claude), run Connect-ExchangeOnline, `
-      + 'sign in as that tenant\'s admin and accept the prompt. Then run connect again.';
+  const ways = [
+    `open this link in your browser and click Accept: ${adminConsentUrl(authority, tenant, resource)} `
+      + '(afterwards the browser may show a page that cannot be reached; that is expected and consent is done)',
+  ];
+  if (resource.key === 'graph') {
+    const short = permissionScopes(resource).filter((x) => x.startsWith(GRAPH_PREFIX)).map((x) => x.slice(GRAPH_PREFIX.length));
+    ways.push(
+      `in Windows PowerShell run: Connect-MgGraph -TenantId ${tenant} -Scopes ${short.map((x) => `"${x}"`).join(',')} `
+        + 'and tick "Consent on behalf of your organization" before accepting',
+    );
   }
-  const graphScopes = resource.scopes.filter((x) => x.startsWith(GRAPH_PREFIX));
-  const short = graphScopes.map((x) => x.slice(GRAPH_PREFIX.length));
-  const link = `${authority.replace(/\/+$/, '')}/${encodeURIComponent(tenant)}/v2.0/adminconsent?${new URLSearchParams({
-    client_id: resource.clientId,
-    scope: graphScopes.join(' '),
-    redirect_uri: resource.redirectUri,
-  })}`;
-  return `To fix it for tenant ${tenant} (once per tenant), do ONE of these yourself, signed in as that tenant's admin: `
-    + `(1) open this link in your browser and click Accept: ${link} `
-    + '(afterwards the browser shows a "can\'t reach localhost" page; that is expected and consent is done); '
-    + `(2) in Windows PowerShell run: Connect-MgGraph -TenantId ${tenant} -Scopes ${short.map((x) => `"${x}"`).join(',')} `
-    + 'and tick "Consent on behalf of your organization" before accepting. '
-    + 'Then run connect again.';
+  if (resource.connectHint) ways.push(`in PowerShell run ${resource.connectHint} once, sign in and accept the prompt`);
+  return `To approve "${resource.appName}" for tenant ${tenant} yourself (once per tenant), signed in as that tenant's admin, do ONE of these: `
+    + `${ways.map((w, i) => `(${i + 1}) ${w}`).join('; ')}. Then try again.`;
 }
 
 export interface SignInParams {
@@ -79,7 +88,7 @@ export interface LaunchOpts {
 }
 
 type State =
-  | 'consent' | 'federated' | 'aad_error' | 'proof_up' | 'password_error' | 'kmsi' | 'otc' | 'pick_otp' | 'other_mfa'
+  | 'consent' | 'needs_admin' | 'federated' | 'aad_error' | 'proof_up' | 'password_error' | 'kmsi' | 'otc' | 'pick_otp' | 'other_mfa'
   | 'password' | 'username' | 'account_tile' | 'none';
 
 const SEL = {
@@ -141,6 +150,7 @@ async function detectState(page: Page, authorityHost: string, username: string):
   if (url && /^https?:$/.test(url.protocol) && url.host !== authorityHost) return 'federated';
   const heading = (await headingText(page)).toLowerCase();
   if (heading.startsWith('permissions requested')) return 'consent';
+  if (/^(need admin approval|approval required)/.test(heading)) return 'needs_admin';
   if ((await visible(page, SEL.proofUp)) || /^(more information required|action required|let's keep your account secure)/.test(heading)) return 'proof_up';
   if (await visible(page, SEL.passwordError)) return 'password_error';
   if ((await page.locator(SEL.kmsi).count().catch(() => 0)) > 0 && (await visible(page, SEL.back))) return 'kmsi';
@@ -164,6 +174,7 @@ function mapAuthError(error: string, description: string): SignInCategory {
   const s = `${error} ${description}`;
   if (/AADSTS5300[03]\b/.test(s)) return 'conditional_access';
   if (/AADSTS(65001|700016)\b/.test(s)) return 'needs_consent';
+  if (/AADSTS(90094|90008)\b/.test(s)) return 'consent_not_allowed';
   if (/AADSTS(50053|50057)\b/.test(s)) return 'account_locked';
   if (/AADSTS50126\b/.test(s)) return 'wrong_password';
   if (/AADSTS(50072|50079)\b/.test(s)) return 'mfa_setup_required';
@@ -171,7 +182,17 @@ function mapAuthError(error: string, description: string): SignInCategory {
   return 'page_changed';
 }
 
-type Outcome = { code: string } | { category: SignInCategory; detail?: string };
+type Failure = { category: SignInCategory; detail?: string };
+type Outcome = { code: string } | { consented: true } | Failure;
+/** What a redirect back to the app means, once its state has been checked. */
+type RedirectReader = (query: URLSearchParams) => Outcome;
+
+function redirectFailure(sp: URLSearchParams): Failure {
+  const err = sp.get('error') ?? '';
+  const desc = sp.get('error_description') ?? '';
+  const code = desc.match(AADSTS)?.[0];
+  return { category: mapAuthError(err, desc), detail: `redirect error ${clip(err, 40)}${code ? ` ${code}` : ''}` };
+}
 
 export class SignInBrowser {
   /**
@@ -208,7 +229,19 @@ export class SignInBrowser {
   }
 
   authorize(p: SignInParams): Promise<{ code: string; verifier: string }> {
-    const run = this.queue.then(() => this.authorizeNow(p));
+    return this.enqueue(() => this.authorizeNow(p));
+  }
+
+  /**
+   * Approves the app for the whole organisation on Microsoft's admin-consent page.
+   * The caller must have the user's explicit Yes first: this is the only code that clicks Accept.
+   */
+  grantConsent(p: SignInParams): Promise<void> {
+    return this.enqueue(() => this.grantConsentNow(p));
+  }
+
+  private enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(fn);
     this.queue = run.catch(() => {});
     return run;
   }
@@ -217,8 +250,6 @@ export class SignInBrowser {
     const { verifier, challenge } = pkcePair();
     const state = randomBytes(16).toString('base64url');
     const user = p.username.toLowerCase();
-    // Playwright errors can quote internals: never pass them through.
-    const context = await this.contextFor(user).catch(() => { throw new SignInError('page_changed'); });
     const authority = p.authority.replace(/\/+$/, '');
     const q = new URLSearchParams({
       client_id: p.resource.clientId,
@@ -232,19 +263,41 @@ export class SignInBrowser {
     if (!this.signedIn.has(user)) q.set('prompt', 'select_account');
     q.set('login_hint', p.username);
     const url = `${authority}/${encodeURIComponent(p.tenant)}/oauth2/v2.0/authorize?${q}`;
+    const result = await this.visit(p, url, state, false, (sp) => {
+      const code = sp.get('code');
+      return sp.get('error') || !code ? redirectFailure(sp) : { code };
+    });
+    if (!('code' in result)) throw new SignInError('page_changed');
+    this.signedIn.add(user);
+    return { code: result.code, verifier };
+  }
+
+  private async grantConsentNow(p: SignInParams): Promise<void> {
+    const state = randomBytes(16).toString('base64url');
+    const url = adminConsentUrl(p.authority, p.tenant, p.resource, state);
+    const result = await this.visit(p, url, state, true, (sp) => {
+      if (sp.get('error')) return redirectFailure(sp);
+      return /^true$/i.test(sp.get('admin_consent') ?? '') ? { consented: true } : { category: 'page_changed', detail: 'admin consent was not confirmed' };
+    });
+    if (!('consented' in result)) throw new SignInError('page_changed');
+  }
+
+  /**
+   * Opens `url` in the account's context, works through Microsoft's pages, and returns what the redirect
+   * back to the app said. Failures throw SignInError. `acceptConsent` is true only for grantConsent.
+   */
+  private async visit(p: SignInParams, url: string, state: string, acceptConsent: boolean, read: RedirectReader): Promise<Outcome> {
+    const user = p.username.toLowerCase();
+    // Playwright errors can quote internals: never pass them through.
+    const context = await this.contextFor(user).catch(() => { throw new SignInError('page_changed'); });
+    const authority = p.authority.replace(/\/+$/, '');
 
     let outcome: Outcome | undefined;
     const isRedirect = (u: string) => u.startsWith(p.resource.redirectUri);
     const capture = (u: string) => {
       if (outcome || !isRedirect(u)) return;
       const sp = new URL(u).searchParams;
-      if (sp.get('state') !== state) { outcome = { category: 'page_changed' }; return; }
-      const err = sp.get('error');
-      const code = sp.get('code');
-      const desc = sp.get('error_description') ?? '';
-      outcome = err || !code
-        ? { category: mapAuthError(err ?? '', desc), detail: `redirect error ${clip(err, 40)}${desc.match(AADSTS) ? ` ${desc.match(AADSTS)![0]}` : ''}` }
-        : { code };
+      outcome = sp.get('state') !== state ? { category: 'page_changed' } : read(sp);
     };
     const matcher = (u: URL) => isRedirect(u.href);
     const handler = async (route: Route) => {
@@ -256,13 +309,12 @@ export class SignInBrowser {
     context.on('request', onRequest);
     const page = await context.newPage();
     try {
-      const result = await this.drive(page, url, new URL(authority).host, p, () => outcome);
+      const result = await this.drive(page, url, new URL(authority).host, p, () => outcome, acceptConsent);
       if ('category' in result) {
         const help = result.category === 'needs_consent' ? consentHelp(authority, p.tenant, p.resource) : undefined;
         throw new SignInError(result.category, result.detail, help);
       }
-      this.signedIn.add(user);
-      return { code: result.code, verifier };
+      return result;
     } catch (e) {
       // Playwright errors can quote selectors or page content: never pass them through.
       if (e instanceof BrokerError) throw e;
@@ -274,7 +326,7 @@ export class SignInBrowser {
     }
   }
 
-  private async drive(page: Page, url: string, authorityHost: string, p: SignInParams, outcome: () => Outcome | undefined): Promise<Outcome> {
+  private async drive(page: Page, url: string, authorityHost: string, p: SignInParams, outcome: () => Outcome | undefined, acceptConsent: boolean): Promise<Outcome> {
     const deadline = Date.now() + this.overallMs;
     const left = () => Math.max(0, Math.min(this.stepMs, deadline - Date.now()));
     page.setDefaultTimeout(this.stepMs);
@@ -309,7 +361,13 @@ export class SignInBrowser {
       await page.evaluate((m) => { (window as any).__sib = m; }, marker).catch(() => {});
 
       switch (state) {
-        case 'consent': return { category: 'needs_consent' };
+        case 'consent':
+          if (!acceptConsent) return { category: 'needs_consent' };
+          // Reached only from grantConsent, i.e. after the user's explicit Yes; and only on Microsoft's own page.
+          if (!onAuthority(page, authorityHost)) return { category: 'federated', detail: await describe(page) };
+          await page.locator(SEL.next).first().click();
+          break;
+        case 'needs_admin': return { category: 'consent_not_allowed' };
         case 'federated': return { category: 'federated', detail: await describe(page) };
         case 'proof_up': return { category: 'mfa_setup_required' };
         case 'aad_error': {

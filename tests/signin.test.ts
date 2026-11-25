@@ -12,7 +12,7 @@ const USER2 = 'ops@fabrikam.com';
 const PASS2 = 'An0ther-Secret!';
 const codeUser = (code: string) => Buffer.from(code.split('-')[1], 'base64url').toString();
 const EXE = '/opt/pw-browsers/chromium';
-const res = (key: 'graph' | 'exo'): Resource => ({ key, clientId: `client-${key}`, redirectUri: 'http://localhost:1/cb', scopes: ['openid', `${key}.read`] });
+const res = (key: 'graph' | 'exo'): Resource => ({ key, clientId: `client-${key}`, redirectUri: 'http://localhost:1/cb', scopes: ['openid', `${key}.read`], appName: `App ${key}` });
 
 let site: FakeLogin | undefined;
 let browser: SignInBrowser | undefined;
@@ -42,8 +42,9 @@ async function category(p: Promise<unknown>): Promise<SignInError> {
 describe('resources', () => {
   it('exposes the first-party client ids', () => {
     const g = graphResource(['User.Read']);
-    expect(g).toEqual({ key: 'graph', clientId: '14d82eec-204b-4c2f-b7e8-296a70dab67e', redirectUri: 'http://localhost', scopes: ['User.Read'] });
-    expect(EXO_RESOURCE).toEqual({
+    expect(g).toMatchObject({ key: 'graph', clientId: '14d82eec-204b-4c2f-b7e8-296a70dab67e', redirectUri: 'http://localhost', scopes: ['User.Read'] });
+    expect(g.appName).toBe('Microsoft Graph Command Line Tools');
+    expect(EXO_RESOURCE).toMatchObject({
       key: 'exo',
       clientId: 'fb78d390-0c51-40cd-8e17-fdbfab77341b',
       redirectUri: 'https://login.microsoftonline.com/organizations/oauth2/nativeclient',
@@ -168,7 +169,7 @@ describe('SignInBrowser.authorize', () => {
 
   it('needs_consent tells the reader exactly how to grant consent for this tenant', async () => {
     const { browser, params } = await setup({ consentHeading: true });
-    const graph = { ...params(), resource: { key: 'graph' as const, clientId: '14d82eec-204b-4c2f-b7e8-296a70dab67e', redirectUri: 'http://localhost', scopes: ['https://graph.microsoft.com/User.ReadWrite.All', 'https://graph.microsoft.com/Group.ReadWrite.All', 'offline_access'] } };
+    const graph = { ...params(), resource: graphResource(['https://graph.microsoft.com/User.ReadWrite.All', 'https://graph.microsoft.com/Group.ReadWrite.All', 'offline_access']) };
     const err = await category(browser.authorize(graph));
     expect(err.category).toBe('needs_consent');
     expect(err.message).toContain('/contoso.com/v2.0/adminconsent?client_id=14d82eec-204b-4c2f-b7e8-296a70dab67e');
@@ -183,7 +184,11 @@ describe('SignInBrowser.authorize', () => {
     const err = await category(browser.authorize({ ...params(), resource: EXO_RESOURCE }));
     expect(err.category).toBe('needs_consent');
     expect(err.message).toContain('Connect-ExchangeOnline');
-    expect(err.message).not.toContain('adminconsent');
+    // every app gets the consent link, with only its permission scopes (no offline_access)
+    expect(err.message).toContain('/contoso.com/v2.0/adminconsent?client_id=fb78d390-0c51-40cd-8e17-fdbfab77341b');
+    expect(err.message).toContain('scope=https%3A%2F%2Foutlook.office365.com%2F.default&');
+    expect(err.message).not.toContain('offline_access');
+    expect(err.message).not.toContain('never accepts');
   });
 
   it('recognises a consent page by its heading and never accepts it', async () => {
@@ -201,5 +206,44 @@ describe('SignInBrowser.authorize', () => {
     // Says where it stopped (address without query, heading), never field values.
     expect(err.message).toMatch(/Stopped at: 127\.0\.0\.1:\d+\/contoso\.com\/oauth2\/v2\.0\/authorize, heading "Something new"/);
     expect(err.message).not.toContain('client_id');
+  });
+
+  describe('grantConsent (only ever called after the user says Yes)', () => {
+    it('signs in, clicks Accept on the admin-consent page, and the next sign-in then succeeds', async () => {
+      const { site, browser, params } = await setup({ consent: true });
+      expect((await category(browser.authorize(params()))).category).toBe('needs_consent');
+      expect(site.adminAccepts()).toBe(0);
+      await browser.grantConsent(params());
+      expect(site.adminAccepts()).toBe(1);
+      // asked for the app's permission scopes only
+      expect(site.lastAdminConsentScope()).toBe('graph.read');
+      expect((await browser.authorize(params())).code).toMatch(/^CODE-/);
+      // the ordinary (per-user) consent page was never accepted
+      expect(site.acceptPosted()).toBe(false);
+    });
+
+    it('authorize on its own never accepts consent of either kind', async () => {
+      const { site, browser, params } = await setup({ consent: true });
+      await category(browser.authorize(params()));
+      await category(browser.authorize(params('exo')));
+      expect(site.acceptPosted()).toBe(false);
+      expect(site.adminAccepts()).toBe(0);
+    });
+
+    it('reports consent_not_allowed when the account may not approve apps', async () => {
+      const a = await setup({ consent: true, notAdmin: true });
+      const err = await category(a.browser.grantConsent(a.params()));
+      expect(err.category).toBe('consent_not_allowed');
+      expect(a.site.adminAccepts()).toBe(0);
+      await a.browser.close();
+      await a.site.close();
+      const b = await setup({ consent: true, adminConsentError: 'AADSTS90094' });
+      expect((await category(b.browser.grantConsent(b.params()))).category).toBe('consent_not_allowed');
+    });
+
+    it('rejects an admin-consent redirect whose state does not match', async () => {
+      const { browser, params } = await setup({ consent: true, wrongState: true });
+      expect((await category(browser.grantConsent(params()))).category).toBe('page_changed');
+    });
   });
 });
