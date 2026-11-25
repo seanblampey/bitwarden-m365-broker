@@ -34,6 +34,14 @@ describe('runAdminCmdlet', () => {
     });
   });
 
+  it('returns the cmdlet\'s warnings (an array, or the bare string PowerShell 5.1 writes for one)', async () => {
+    const many = await runAdminCmdlet(runner(JSON.stringify({ ok: true, result: [], total: 0, warnings: ['a', 'b', 'c', 'd', 5] })), base);
+    expect(many.warnings).toEqual(['a', 'b', 'c']);
+    const one = await runAdminCmdlet(runner(JSON.stringify({ ok: true, result: [], total: 0, warnings: 'only one' })), base);
+    expect(one.warnings).toEqual(['only one']);
+    expect(await runAdminCmdlet(runner('{"ok":true,"result":[]}'), base)).toEqual({ result: [] });
+  });
+
   it('sends the Graph token for teams', async () => {
     const r = runner('{"ok":true,"result":[]}');
     await runAdminCmdlet(r, { ...base, service: 'teams', graphToken: 'GRAPHTOKEN456', cmdlet: 'Get-CsTeamsMeetingPolicy', parameters: {} });
@@ -155,9 +163,23 @@ describe('run-admin-cmdlet.ps1', () => {
     const block = /if \(\(\$name -cnotlike 'Get-\*'\) -and \$cmd\.Parameters\.ContainsKey\('Confirm'\)\) \{\s*\$params\['Confirm'\] = \$false\s*\}/;
     expect(src).toMatch(block);
     const set = src.indexOf("$params['Confirm'] = $false");
-    expect(set).toBeGreaterThan(src.indexOf('ConvertTo-Param $p.Value'));
+    expect(set).toBeGreaterThan(src.indexOf('$params[$real] = ConvertTo-Param $p.Value'));
     expect(set).toBeLessThan(src.indexOf('& $cmd @params'));
     expect(src).toMatch(/\$service -eq 'sharepoint'\) -and \(\$name -cnotlike 'Get-\*'\) -and \$cmd\.Parameters\.ContainsKey\('Force'\)/);
+  });
+
+  it('accepts full parameter names only, so a prefix or alias cannot slip past the broker\'s checks', () => {
+    expect(src).toContain('foreach ($k in $cmd.Parameters.Keys) { if ($k -ieq $p.Name) { $real = $k; break } }');
+    expect(src).toContain('$params[$real] = ConvertTo-Param $p.Value');
+    expect(src).not.toContain('$params[$p.Name]');
+    expect(src).toMatch(/is not a parameter of \$name\. Use full parameter names \(no abbreviations or aliases\)/);
+    // refused before the cmdlet runs
+    expect(src.indexOf('if ($null -ne $unknown)')).toBeLessThan(src.indexOf('& $cmd @params'));
+  });
+
+  it('collects warnings instead of discarding them', () => {
+    expect(src).toContain("if ($cmd.Parameters.ContainsKey('WarningVariable')) { $params['WarningVariable'] = 'warnings' }");
+    expect(src).toContain("$envelope['warnings'] = $warningTexts");
   });
 
   it('counts everything, keeps the first items, and selects without script blocks', () => {

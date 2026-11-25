@@ -177,6 +177,7 @@ describe('SignInBrowser.authorize', () => {
     expect(err.message).toContain('/contoso.com/v2.0/adminconsent?client_id=14d82eec-204b-4c2f-b7e8-296a70dab67e');
     expect(err.message).toContain('scope=https%3A%2F%2Fgraph.microsoft.com%2FUser.ReadWrite.All+https%3A%2F%2Fgraph.microsoft.com%2FGroup.ReadWrite.All&');
     expect(err.message).toContain('Connect-MgGraph -TenantId contoso.com -Scopes "User.ReadWrite.All","Group.ReadWrite.All"');
+    expect(err.message).toContain('Install-Module Microsoft.Graph.Authentication -Scope CurrentUser');
     expect(err.message).not.toContain('offline_access');
     expect(err.message).toContain('Consent on behalf of your organization');
   });
@@ -208,6 +209,27 @@ describe('SignInBrowser.authorize', () => {
     // Says where it stopped (address without query, heading), never field values.
     expect(err.message).toMatch(/Stopped at: 127\.0\.0\.1:\d+\/contoso\.com\/oauth2\/v2\.0\/authorize, heading "Something new"/);
     expect(err.message).not.toContain('client_id');
+  });
+
+  it('clicks the account-picker tile even when the Bitwarden username is typed in a different case', async () => {
+    const MIXED = 'Admin@Contoso.com';
+    const { site, browser, params } = await setup({ alwaysPicker: true, users: { [MIXED]: PASS } });
+    await browser.authorize(params('graph', MIXED));
+    const views = site.passwordPageViews();
+    // Session exists, so the picker is shown; its tile is written in lower case.
+    const second = await browser.authorize(params('exo', MIXED));
+    expect(codeUser(second.code)).toBe(MIXED);
+    expect(site.passwordPageViews()).toBe(views);
+  });
+
+  it('after consent is granted, the next sign-in does not ask to pick an account', async () => {
+    const { site, browser, params } = await setup({ consent: true });
+    await category(browser.authorize(params()));
+    await browser.grantConsent(params());
+    const views = site.passwordPageViews();
+    expect((await browser.authorize(params())).code).toMatch(/^CODE-/);
+    // rode the session left by the consent sign-in: no second password entry
+    expect(site.passwordPageViews()).toBe(views);
   });
 
   describe('grantConsent (only ever called after the user says Yes)', () => {

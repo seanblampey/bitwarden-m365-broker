@@ -145,10 +145,19 @@ try {
         $envelope = @{ ok = $false; error = "This cmdlet does not belong to the $service PowerShell module, so it was not run." }
     } else {
         $params = @{}
+        $unknown = $null
         if ($null -ne $req.parameters) {
             foreach ($p in $req.parameters.PSObject.Properties) {
-                $params[$p.Name] = ConvertTo-Param $p.Value
+                # Full parameter names only. PowerShell would also accept prefixes (-O for -Out) and aliases,
+                # which would slip past the broker's checks on parameter names.
+                $real = $null
+                foreach ($k in $cmd.Parameters.Keys) { if ($k -ieq $p.Name) { $real = $k; break } }
+                if ($null -eq $real) { $unknown = $p.Name; break }
+                $params[$real] = ConvertTo-Param $p.Value
             }
+        }
+        if ($null -ne $unknown) {
+            throw "'$unknown' is not a parameter of $name. Use full parameter names (no abbreviations or aliases)."
         }
         # $ErrorActionPreference does not reach module functions; force it per call.
         $params['ErrorAction'] = 'Stop'
@@ -162,6 +171,10 @@ try {
             $params['Force'] = $true
         }
 
+        # Warnings matter (Exchange says when it stopped at its default 1000 results), so they are collected
+        # and reported instead of being thrown away. The broker rejects a caller WarningVariable.
+        $warnings = $null
+        if ($cmd.Parameters.ContainsKey('WarningVariable')) { $params['WarningVariable'] = 'warnings' }
         $all = @(& $cmd @params 3>$null 4>$null 5>$null 6>$null)
         $total = $all.Count
         $take = $DefaultItems
@@ -177,6 +190,8 @@ try {
         }
         $envelope = @{ ok = $true; result = $shown; total = $total }
         if ($note) { $envelope['note'] = $note }
+        $warningTexts = @($warnings | Where-Object { $null -ne $_ } | Select-Object -First 3 | ForEach-Object { [string]$_ })
+        if ($warningTexts.Count -gt 0) { $envelope['warnings'] = $warningTexts }
     }
 } catch {
     $envelope = @{ ok = $false; error = [string]$_.Exception.Message }
@@ -200,7 +215,9 @@ try {
     try {
         if (-not $envelope['ok']) { throw 'not a result' }
         $flat = @($envelope['result'] | ForEach-Object { ConvertTo-Flat $_ })
-        $json = @{ ok = $true; result = $flat; total = $envelope['total']; note = 'Only simple properties are shown. Use select to pick specific properties.' } | ConvertTo-Json -Depth 4 -Compress
+        $fallback = @{ ok = $true; result = $flat; total = $envelope['total']; note = 'Only simple properties are shown. Use select to pick specific properties.' }
+        if ($envelope.ContainsKey('warnings')) { $fallback['warnings'] = $envelope['warnings'] }
+        $json = $fallback | ConvertTo-Json -Depth 4 -Compress
     } catch {
         $json = (@{ ok = $false; error = 'Could not serialize result.' } | ConvertTo-Json -Compress)
     }

@@ -68,18 +68,21 @@ export function createServer(broker: Broker): McpServer {
         tenant,
         service: z.enum(SERVICES),
         cmdlet: z.string().describe('Cmdlet name, e.g. Get-Mailbox, Get-RetentionCompliancePolicy, Get-CsTeamsMeetingPolicy, Get-PnPTenantSite'),
-        parameters: z.record(z.string(), z.unknown()).optional().describe('Named parameters, e.g. {"Identity":"user@x.com"}'),
-        select: z.array(z.string()).optional().describe('Property names to return, e.g. ["DisplayName","PrimarySmtpAddress"]; dotted paths allowed'),
-        first: z.number().int().min(1).max(1000).optional().describe('Return at most this many items (default 200); the total count is still reported'),
-        site: z.string().optional().describe('sharepoint only: site URL to work in, e.g. https://contoso.sharepoint.com/sites/Finance; default is the admin site'),
+        parameters: z.record(z.string(), z.unknown()).nullish().describe('Named parameters, e.g. {"Identity":"user@x.com"}'),
+        select: z.array(z.string()).nullish().describe('Property names to return, e.g. ["DisplayName","PrimarySmtpAddress"]; dotted paths allowed'),
+        first: z.number().int().min(1).max(1000).nullish().describe('Return at most this many items (default 200); totalItems still says how many the cmdlet returned'),
+        site: z.string().nullish().describe('sharepoint only: site URL to work in, e.g. https://contoso.sharepoint.com/sites/Finance; default is the admin site'),
       },
     },
-    async (a) => result(await broker.adminCmdlet(a.tenant, a.service, a.cmdlet, a.parameters, { select: a.select, first: a.first, site: a.site })),
+    // Some models send null for options they are not using; treat it as absent.
+    async (a) => result(await broker.adminCmdlet(a.tenant, a.service, a.cmdlet, a.parameters ?? undefined, {
+      select: a.select ?? undefined, first: a.first ?? undefined, site: a.site ?? undefined,
+    })),
   );
   server.registerTool(
     'disconnect',
-    { description: 'Forget the cached Microsoft sign-in for one tenant, or for all tenants if none is given.', inputSchema: { tenant: tenant.optional() } },
-    async (a) => result(await broker.disconnect(a.tenant)),
+    { description: 'Forget the cached Microsoft sign-in for one tenant, or for all tenants if none is given.', inputSchema: { tenant: tenant.nullish() } },
+    async (a) => result(await broker.disconnect(a.tenant ?? undefined)),
   );
   server.registerTool(
     'lock',

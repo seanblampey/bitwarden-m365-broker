@@ -427,6 +427,24 @@ describe('Broker adminCmdlet (other services, shaping, consent)', () => {
     expect(parse(await noted.broker.adminCmdlet('acme', 'sharepoint', 'Get-PnPTenantSite'))).toEqual({ result: [{ Url: 'u' }], note: 'Only simple properties are shown.' });
   });
 
+  it('passes on the cmdlet\'s warnings, such as Exchange stopping at 1000 results', async () => {
+    const w = 'There are more results available than are currently displayed. To view them, increase the value for the ResultSize parameter.';
+    const t = setup({ exoStdout: JSON.stringify({ ok: true, result: [{ Name: 'a' }], total: 1000, warnings: [w] }) });
+    const out = parse(await t.broker.adminCmdlet('acme', 'exchange', 'Get-Mailbox', {}, { first: 1 }));
+    expect(out.totalItems).toBe(1000);
+    expect(out.warnings).toEqual([w]);
+  });
+
+  it('treats null options as absent (some models send null for options they do not use)', async () => {
+    const t = setup();
+    const out = parse(await t.broker.adminCmdlet('acme', 'exchange', 'Get-Mailbox', undefined, { select: null, first: null, site: null }));
+    expect(out).toEqual({ result: [{ Name: 'x' }] });
+    const stdin = JSON.parse(t.ps.mock.calls[0][1]);
+    expect(stdin).not.toHaveProperty('select');
+    expect(stdin).not.toHaveProperty('first');
+    expect(stdin).not.toHaveProperty('url');
+  });
+
   it('a missing module is reported as module_missing with the install command', async () => {
     const msg = 'The MicrosoftTeams PowerShell module is not installed. Run in Windows PowerShell (powershell.exe), not PowerShell 7: Install-Module MicrosoftTeams -Scope CurrentUser';
     const t = setup({ exoStdout: JSON.stringify({ ok: false, code: 'module_missing', error: msg }) });
@@ -473,10 +491,13 @@ describe('makeConsentApprover', () => {
     expect(no.events.map((e) => e.type)).toEqual(['consent_requested', 'consent_denied']);
   });
 
-  it('a dialog failure or an over-long request is a No', async () => {
+  it('a dialog that cannot be shown is not an answer: it throws, so the user can be asked again', async () => {
     const failed = approver(new BrokerError('dialog_failed', 'x'));
-    expect(await failed.ask(request)).toBe(false);
-    expect(failed.events.at(-1)?.type).toBe('consent_denied');
+    await expect(failed.ask(request)).rejects.toMatchObject({ code: 'dialog_failed' });
+    expect(failed.events.map((e) => e.type)).toEqual(['consent_requested', 'error']);
+  });
+
+  it('a request too long to show in full is a No', async () => {
     const long = approver(true);
     expect(await long.ask({ ...request, scopes: Array.from({ length: 200 }, (_, i) => `https://graph.microsoft.com/Permission${i}.ReadWrite.All`) })).toBe(false);
     expect(long.confirm).not.toHaveBeenCalled();

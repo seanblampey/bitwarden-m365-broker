@@ -36842,6 +36842,7 @@ var Redactor = class {
 var TIMEOUT_MS = 5 * 60 * 1e3;
 var MAX_ERROR = 1e3;
 var EXE = { powershell: "powershell.exe", pwsh: "pwsh.exe" };
+var TIMED_OUT = "The command ran for more than 5 minutes and was stopped. Narrow it: use the cmdlet's own filter or a smaller ResultSize, or split the work.";
 var NO_PWSH = "PowerShell 7 (pwsh) is not installed, and SharePoint needs it. Install it yourself: winget install Microsoft.PowerShell";
 function defaultPsRunner() {
   const script = assetPath("admin/run-admin-cmdlet.ps1");
@@ -36858,7 +36859,7 @@ function defaultPsRunner() {
       child.kill();
       if (!done) {
         done = true;
-        reject(new Error("timeout"));
+        reject(new BrokerError("cmdlet_failed", TIMED_OUT));
       }
     }, TIMEOUT_MS);
     child.stdout.setEncoding("utf8").on("data", (d) => {
@@ -36941,10 +36942,13 @@ async function runAdminCmdlet(run, args) {
     const code = typeof env.code === "string" && SCRIPT_CODES.has(env.code) ? env.code : "cmdlet_failed";
     throw new BrokerError(code, redactor.scrub(text).slice(0, MAX_ERROR));
   }
+  const rawWarnings = typeof env.warnings === "string" ? [env.warnings] : Array.isArray(env.warnings) ? env.warnings : [];
+  const warnings = rawWarnings.filter((w) => typeof w === "string").slice(0, 3).map((w) => w.slice(0, 300));
   return {
     result: env.result ?? null,
     ...typeof env.total === "number" ? { total: env.total } : {},
-    ...typeof env.note === "string" ? { note: env.note.slice(0, 300) } : {}
+    ...typeof env.note === "string" ? { note: env.note.slice(0, 300) } : {},
+    ...warnings.length > 0 ? { warnings } : {}
   };
 }
 
@@ -37990,7 +37994,7 @@ function consentHelp(authority, tenant, resource) {
   if (resource.key === "graph") {
     const short = permissionScopes(resource).filter((x) => x.startsWith(GRAPH_PREFIX)).map((x) => x.slice(GRAPH_PREFIX.length));
     ways.push(
-      `in Windows PowerShell run: Connect-MgGraph -TenantId ${tenant} -Scopes ${short.map((x) => `"${x}"`).join(",")} and tick "Consent on behalf of your organization" before accepting`
+      `in Windows PowerShell run: Connect-MgGraph -TenantId ${tenant} -Scopes ${short.map((x) => `"${x}"`).join(",")} and tick "Consent on behalf of your organization" before accepting (needs the Microsoft.Graph.Authentication module: Install-Module Microsoft.Graph.Authentication -Scope CurrentUser)`
     );
   }
   if (resource.connectHint) ways.push(`in PowerShell run ${resource.connectHint} once, sign in and accept the prompt`);
@@ -38037,6 +38041,7 @@ async function describe3(page) {
   const code = (await bodyText(page)).match(AADSTS)?.[0];
   return [where, title && `title "${title}"`, heading && heading !== title && `heading "${heading}"`, code].filter(Boolean).join(", ") || "no page loaded";
 }
+var accountTile = (username) => `[data-test-id=${JSON.stringify(username)} i]`;
 var visible = (page, sel) => page.locator(sel).first().isVisible().catch(() => false);
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function detectState(page, authorityHost, username) {
@@ -38059,7 +38064,7 @@ async function detectState(page, authorityHost, username) {
   if (await visible(page, SEL.pushTitle) || await visible(page, SEL.pushProof)) return "other_mfa";
   if (await visible(page, SEL.passwd)) return "password";
   if (await visible(page, SEL.loginfmt)) return "username";
-  if (await visible(page, `[data-test-id=${JSON.stringify(username)}]`)) return "account_tile";
+  if (await visible(page, accountTile(username))) return "account_tile";
   if (AADSTS.test(await bodyText(page))) return "aad_error";
   return "none";
 }
@@ -38169,6 +38174,7 @@ var SignInBrowser = class _SignInBrowser {
       return /^true$/i.test(sp.get("admin_consent") ?? "") ? { consented: true } : { category: "page_changed", detail: "admin consent was not confirmed" };
     });
     if (!("consented" in result2)) throw new SignInError("page_changed");
+    this.signedIn.add(p.username.toLowerCase());
   }
   /**
    * Opens `url` in the account's context, works through Microsoft's pages, and returns what the redirect
@@ -38295,7 +38301,7 @@ var SignInBrowser = class _SignInBrowser {
           await page.locator(SEL.back).first().click();
           break;
         case "account_tile":
-          await page.locator(`[data-test-id=${JSON.stringify(p.username)}]`).first().click();
+          await page.locator(accountTile(p.username)).first().click();
           break;
       }
     }
@@ -38377,8 +38383,9 @@ ${r.scopes.map((s) => `- ${escapeForDisplay(s)}`).join("\n")}`
     if (action.length <= MAX_ACTION) {
       try {
         ok = await deps.confirm({ tenant, account: escapeForDisplay(r.account), action });
-      } catch {
-        ok = false;
+      } catch (e) {
+        deps.audit.write({ type: "error", tenant: r.alias, detail: `consent dialog failed: ${r.appName}` });
+        throw e;
       }
     }
     deps.audit.write({ type: ok ? "consent_approved" : "consent_denied", tenant: r.alias, detail: r.appName });
@@ -38424,12 +38431,12 @@ var Broker = class {
   /** Runs one cmdlet of one admin service (exchange, compliance, teams, sharepoint). */
   adminCmdlet(tenant, service, cmdlet, parameters, opts = {}) {
     return this.run(tenant, async () => {
-      const checked = checkService(service, opts.site);
+      const checked = checkService(service, opts.site ?? void 0);
       validateCmdlet(cmdlet);
       const params = validateParameters(parameters ?? {});
       assertNoForbiddenCommon(params);
-      const select = validateSelect(opts.select);
-      const first = validateFirst(opts.first);
+      const select = validateSelect(opts.select ?? void 0);
+      const first = validateFirst(opts.first ?? void 0);
       const where = checked.site ? `${checked.service} ${checked.site}` : checked.service;
       const action = isCmdletRead(cmdlet, params) ? void 0 : `[${escapeForDisplay(where)}] ${cmdletAction(cmdlet, params)}`;
       if (action !== void 0) assertShowable(action);
@@ -38454,10 +38461,11 @@ var Broker = class {
         ...first !== void 0 ? { first } : {}
       });
       const capped = capResult(out.result, { total: out.total });
+      const warnings = out.warnings ? { warnings: out.warnings } : {};
       if (isCutList(capped)) {
-        return { result: capped.items, truncated: true, totalItems: capped.totalItems, shownItems: capped.shownItems, note: capped.note };
+        return { result: capped.items, truncated: true, totalItems: capped.totalItems, shownItems: capped.shownItems, note: capped.note, ...warnings };
       }
-      return { result: capped, ...out.note ? { note: out.note } : {} };
+      return { result: capped, ...out.note ? { note: out.note } : {}, ...warnings };
     });
   }
   disconnect(tenant) {
@@ -38674,13 +38682,18 @@ var TokenManager = class {
       const { approveConsent, audit } = this.deps;
       const declinedKey = JSON.stringify([cred.alias, resource.clientId]);
       if (!(e instanceof SignInError) || e.category !== "needs_consent" || !approveConsent || this.declined.has(declinedKey)) throw e;
-      const approved = await approveConsent({
-        alias: cred.alias,
-        tenant: cred.tenant,
-        account: cred.username,
-        appName: resource.appName,
-        scopes: permissionScopes(resource)
-      }).catch(() => false);
+      let approved;
+      try {
+        approved = await approveConsent({
+          alias: cred.alias,
+          tenant: cred.tenant,
+          account: cred.username,
+          appName: resource.appName,
+          scopes: permissionScopes(resource)
+        });
+      } catch {
+        throw e;
+      }
       if (!approved) {
         this.declined.add(declinedKey);
         throw e;
@@ -39167,18 +39180,23 @@ function createServer(broker) {
         tenant,
         service: external_exports.enum(SERVICES),
         cmdlet: external_exports.string().describe("Cmdlet name, e.g. Get-Mailbox, Get-RetentionCompliancePolicy, Get-CsTeamsMeetingPolicy, Get-PnPTenantSite"),
-        parameters: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe('Named parameters, e.g. {"Identity":"user@x.com"}'),
-        select: external_exports.array(external_exports.string()).optional().describe('Property names to return, e.g. ["DisplayName","PrimarySmtpAddress"]; dotted paths allowed'),
-        first: external_exports.number().int().min(1).max(1e3).optional().describe("Return at most this many items (default 200); the total count is still reported"),
-        site: external_exports.string().optional().describe("sharepoint only: site URL to work in, e.g. https://contoso.sharepoint.com/sites/Finance; default is the admin site")
+        parameters: external_exports.record(external_exports.string(), external_exports.unknown()).nullish().describe('Named parameters, e.g. {"Identity":"user@x.com"}'),
+        select: external_exports.array(external_exports.string()).nullish().describe('Property names to return, e.g. ["DisplayName","PrimarySmtpAddress"]; dotted paths allowed'),
+        first: external_exports.number().int().min(1).max(1e3).nullish().describe("Return at most this many items (default 200); totalItems still says how many the cmdlet returned"),
+        site: external_exports.string().nullish().describe("sharepoint only: site URL to work in, e.g. https://contoso.sharepoint.com/sites/Finance; default is the admin site")
       }
     },
-    async (a) => result(await broker.adminCmdlet(a.tenant, a.service, a.cmdlet, a.parameters, { select: a.select, first: a.first, site: a.site }))
+    // Some models send null for options they are not using; treat it as absent.
+    async (a) => result(await broker.adminCmdlet(a.tenant, a.service, a.cmdlet, a.parameters ?? void 0, {
+      select: a.select ?? void 0,
+      first: a.first ?? void 0,
+      site: a.site ?? void 0
+    }))
   );
   server.registerTool(
     "disconnect",
-    { description: "Forget the cached Microsoft sign-in for one tenant, or for all tenants if none is given.", inputSchema: { tenant: tenant.optional() } },
-    async (a) => result(await broker.disconnect(a.tenant))
+    { description: "Forget the cached Microsoft sign-in for one tenant, or for all tenants if none is given.", inputSchema: { tenant: tenant.nullish() } },
+    async (a) => result(await broker.disconnect(a.tenant ?? void 0))
   );
   server.registerTool(
     "lock",

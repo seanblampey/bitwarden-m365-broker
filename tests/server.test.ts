@@ -54,10 +54,13 @@ describe('MCP server', () => {
     const r = await client.callTool({ name: 'admin_cmdlet', arguments: { tenant: 'acme', service: 'exchange', cmdlet: 'Set-Mailbox', parameters: { Identity: 'x' }, select: ['Name'], first: 3 } });
     expect(r.isError).toBe(true);
     expect(broker.adminCmdlet).toHaveBeenCalledWith('acme', 'exchange', 'Set-Mailbox', { Identity: 'x' }, { select: ['Name'], first: 3, site: undefined });
+    // null for unused options is accepted and passed on as absent
+    await client.callTool({ name: 'admin_cmdlet', arguments: { tenant: 'acme', service: 'teams', cmdlet: 'Get-CsTeamsMeetingPolicy', parameters: null, select: null, first: null, site: null } });
+    expect(broker.adminCmdlet).toHaveBeenLastCalledWith('acme', 'teams', 'Get-CsTeamsMeetingPolicy', undefined, { select: undefined, first: undefined, site: undefined });
     // an unknown service never reaches the broker
     const bad = await client.callTool({ name: 'admin_cmdlet', arguments: { tenant: 'acme', service: 'azure', cmdlet: 'Get-Thing' } }).catch((e) => ({ isError: true, e }));
     expect((bad as { isError?: boolean }).isError).toBe(true);
-    expect(broker.adminCmdlet).toHaveBeenCalledTimes(1);
+    expect(broker.adminCmdlet).toHaveBeenCalledTimes(2);
   });
 
   it('routes the remaining tools', async () => {

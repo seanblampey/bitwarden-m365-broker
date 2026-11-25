@@ -30,11 +30,15 @@ export interface AdminCmdletResult {
   /** How many items the cmdlet returned before the script kept the first few. */
   total?: number;
   note?: string;
+  /** Warnings the cmdlet raised, e.g. Exchange saying it stopped at its default 1000 results. */
+  warnings?: string[];
 }
 
 const TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_ERROR = 1000;
 const EXE: Record<Shell, string> = { powershell: 'powershell.exe', pwsh: 'pwsh.exe' };
+const TIMED_OUT =
+  'The command ran for more than 5 minutes and was stopped. Narrow it: use the cmdlet\'s own filter or a smaller ResultSize, or split the work.';
 const NO_PWSH = 'PowerShell 7 (pwsh) is not installed, and SharePoint needs it. Install it yourself: winget install Microsoft.PowerShell';
 
 export function defaultPsRunner(): PsRunner {
@@ -51,7 +55,7 @@ export function defaultPsRunner(): PsRunner {
       let done = false;
       const timer = setTimeout(() => {
         child.kill();
-        if (!done) { done = true; reject(new Error('timeout')); }
+        if (!done) { done = true; reject(new BrokerError('cmdlet_failed', TIMED_OUT)); }
       }, TIMEOUT_MS);
       child.stdout.setEncoding('utf8').on('data', (d: string) => { stdout += d; });
       child.stderr.setEncoding('utf8').on('data', (d: string) => { stderr += d; });
@@ -73,7 +77,7 @@ export function defaultPsRunner(): PsRunner {
 
 const UNEXPECTED = 'The PowerShell command failed unexpectedly.';
 
-interface Envelope { ok: boolean; result?: unknown; total?: unknown; note?: unknown; error?: unknown; code?: unknown }
+interface Envelope { ok: boolean; result?: unknown; total?: unknown; note?: unknown; warnings?: unknown; error?: unknown; code?: unknown }
 
 function parseEnvelope(stdout: string): Envelope | undefined {
   const lines = stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -127,9 +131,13 @@ export async function runAdminCmdlet(run: PsRunner, args: AdminCmdletArgs): Prom
     const code = typeof env.code === 'string' && SCRIPT_CODES.has(env.code) ? env.code : 'cmdlet_failed';
     throw new BrokerError(code, redactor.scrub(text).slice(0, MAX_ERROR));
   }
+  // PowerShell 5.1 writes a one-item array as a bare string.
+  const rawWarnings = typeof env.warnings === 'string' ? [env.warnings] : Array.isArray(env.warnings) ? env.warnings : [];
+  const warnings = rawWarnings.filter((w): w is string => typeof w === 'string').slice(0, 3).map((w) => w.slice(0, 300));
   return {
     result: env.result ?? null,
     ...(typeof env.total === 'number' ? { total: env.total } : {}),
     ...(typeof env.note === 'string' ? { note: env.note.slice(0, 300) } : {}),
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }

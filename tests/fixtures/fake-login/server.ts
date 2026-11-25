@@ -30,6 +30,8 @@ export interface FakeLoginOpts {
   notAdmin?: boolean;
   /** Admin consent: redirect straight back with this AADSTS error. */
   adminConsentError?: string;
+  /** Show "Pick an account" whenever a session exists, even without prompt=select_account. */
+  alwaysPicker?: boolean;
 }
 
 export interface FakeLogin {
@@ -135,7 +137,10 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
       if (!f) return send(res, page('gone'));
       granted.add(f.clientId ?? '');
       const q = new URLSearchParams({ admin_consent: 'True', tenant: 'contoso.com', state: state(f) });
-      return redirect(res, `${f.redirectUri}?${q}`);
+      // Like Entra, the admin who just signed in to approve the app now has a session.
+      if (f.user) sessionUsers = [...new Set([...sessionUsers, f.user])];
+      const cookieHeader: Record<string, string> = sessionUsers.length ? { 'set-cookie': `fakesession=${encodeURIComponent(sessionUsers.join(','))}; Path=/; HttpOnly` } : {};
+      return redirect(res, `${f.redirectUri}?${q}`, cookieHeader);
     }
     if (req.method === 'GET' && /\/oauth2\/v2\.0\/authorize$/.test(path)) {
       const f: Flow = {
@@ -158,12 +163,13 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
       // otherwise (pessimistically) the first signed-in account. With prompt=select_account and
       // any session, real Entra shows "Pick an account" (signed-in tiles plus "Use another account"),
       // even when the hinted account is not among them; the login page appears only with no session.
-      if (session.length && u.searchParams.get('prompt') !== 'select_account') {
+      if (session.length && u.searchParams.get('prompt') !== 'select_account' && !opts.alwaysPicker) {
         f.user = session.includes(f.hint) ? f.hint : session[0];
         return afterKmsi(res, id, f);
       }
       if (session.length) {
-        const tiles = session.map((s) => `<button type="submit" name="pick" value="${s}" data-test-id="${s}">${s}</button>`).join('');
+        // Entra writes the address in lower case in the tile's data-test-id.
+        const tiles = session.map((s) => `<button type="submit" name="pick" value="${s}" data-test-id="${s.toLowerCase()}">${s}</button>`).join('');
         return send(res, page(form(id, 'pick', `${tiles}<div id="otherTile">Use another account</div>`)));
       }
       return send(res, page(form(id, 'user', '<input name="loginfmt" type="email"><input type="submit" id="idSIButton9" value="Next">')));

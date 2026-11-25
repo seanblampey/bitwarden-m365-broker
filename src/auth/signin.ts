@@ -62,7 +62,8 @@ export function consentHelp(authority: string, tenant: string, resource: Resourc
     const short = permissionScopes(resource).filter((x) => x.startsWith(GRAPH_PREFIX)).map((x) => x.slice(GRAPH_PREFIX.length));
     ways.push(
       `in Windows PowerShell run: Connect-MgGraph -TenantId ${tenant} -Scopes ${short.map((x) => `"${x}"`).join(',')} `
-        + 'and tick "Consent on behalf of your organization" before accepting',
+        + 'and tick "Consent on behalf of your organization" before accepting '
+        + '(needs the Microsoft.Graph.Authentication module: Install-Module Microsoft.Graph.Authentication -Scope CurrentUser)',
     );
   }
   if (resource.connectHint) ways.push(`in PowerShell run ${resource.connectHint} once, sign in and accept the prompt`);
@@ -138,6 +139,9 @@ async function describe(page: Page): Promise<string> {
     .filter(Boolean).join(', ') || 'no page loaded';
 }
 
+/** The account-picker tile for a user. Microsoft writes the address in lower case; Bitwarden may not. */
+const accountTile = (username: string) => `[data-test-id=${JSON.stringify(username)} i]`;
+
 const visible = (page: Page, sel: string) => page.locator(sel).first().isVisible().catch(() => false);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -159,7 +163,7 @@ async function detectState(page: Page, authorityHost: string, username: string):
   if ((await visible(page, SEL.pushTitle)) || (await visible(page, SEL.pushProof))) return 'other_mfa';
   if (await visible(page, SEL.passwd)) return 'password';
   if (await visible(page, SEL.loginfmt)) return 'username';
-  if (await visible(page, `[data-test-id=${JSON.stringify(username)}]`)) return 'account_tile';
+  if (await visible(page, accountTile(username))) return 'account_tile';
   // Microsoft shows many sign-in errors on its own page instead of redirecting back.
   if (AADSTS.test(await bodyText(page))) return 'aad_error';
   return 'none';
@@ -280,6 +284,8 @@ export class SignInBrowser {
       return /^true$/i.test(sp.get('admin_consent') ?? '') ? { consented: true } : { category: 'page_changed', detail: 'admin consent was not confirmed' };
     });
     if (!('consented' in result)) throw new SignInError('page_changed');
+    // This account's context is signed in now, so the sign-in that follows must not ask to pick an account.
+    this.signedIn.add(p.username.toLowerCase());
   }
 
   /**
@@ -401,7 +407,7 @@ export class SignInBrowser {
           await page.locator(SEL.back).first().click();
           break;
         case 'account_tile':
-          await page.locator(`[data-test-id=${JSON.stringify(p.username)}]`).first().click();
+          await page.locator(accountTile(p.username)).first().click();
           break;
       }
     }

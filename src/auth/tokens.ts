@@ -140,13 +140,19 @@ export class TokenManager {
       const { approveConsent, audit } = this.deps;
       const declinedKey = JSON.stringify([cred.alias, resource.clientId]);
       if (!(e instanceof SignInError) || e.category !== 'needs_consent' || !approveConsent || this.declined.has(declinedKey)) throw e;
-      const approved = await approveConsent({
-        alias: cred.alias,
-        tenant: cred.tenant,
-        account: cred.username,
-        appName: resource.appName,
-        scopes: permissionScopes(resource),
-      }).catch(() => false);
+      let approved: boolean;
+      try {
+        approved = await approveConsent({
+          alias: cred.alias,
+          tenant: cred.tenant,
+          account: cred.username,
+          appName: resource.appName,
+          scopes: permissionScopes(resource),
+        });
+      } catch {
+        // The question could not be asked (dialog failed). Not a No: ask again next time.
+        throw e;
+      }
       if (!approved) {
         this.declined.add(declinedKey);
         throw e;

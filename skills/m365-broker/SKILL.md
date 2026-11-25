@@ -37,7 +37,8 @@ Every extra field and row costs time and tokens. Ask for exactly what answers th
 - **Pick fields.** Graph: always add `$select`. Cmdlets: always pass `select` (property names; dotted paths such as `Owner.Email` work).
 - **Limit rows.** Graph: `$top`. Cmdlets: `first` (default 200, max 1000), and the cmdlet's own limit when it has one (`ResultSize`).
 - **Filter on the server**, not after: Graph `$filter` / `$search`; cmdlets `Filter`, `Identity`, `RecipientTypeDetails` and similar. Never fetch everything to find one object.
-- **Count, don't list**, when the question is "how many". Graph: `/users/$count` or `$count=true&$top=1`. Cmdlets: `first: 1` - the result's `totalItems` is the full count.
+- **Count, don't list**, when the question is "how many". Graph: `/users/$count` or `$count=true&$top=1`. Cmdlets: `first: 1` - the result's `totalItems` is how many the cmdlet returned. Exchange and compliance cmdlets stop at 1000 unless you pass `ResultSize: "Unlimited"`, so pass it when counting, and check the result's `warnings`.
+- **Read `warnings`** in a result: they come from the cmdlet (for example "more results available") and usually mean the answer is incomplete.
 - **One object at a time for detail.** Find it with a narrow query, then fetch that one object's other properties.
 - **If a result says `truncated`**, it shows `totalItems` and `shownItems`. Narrow the query; do not page through everything unless the user asked for the full list.
 - **Don't repeat a call** you already have the answer to in this conversation, and don't call `connect` or `list_tenants` again once you know the alias.
@@ -57,6 +58,7 @@ Wasteful: `/users` with no `$select`.
 - `denied`: the user said No. Do not retry or look for another way; ask what they want.
 - `too_long_to_approve`: split the change into smaller calls.
 - Do not pass `Confirm`; the user's Yes is the confirmation. `WhatIf` is allowed and is a good way to preview.
+- Use full parameter names (`Identity`, not `Id`); abbreviations and aliases are refused.
 
 ## Rules
 

@@ -285,11 +285,14 @@ describe('TokenManager', () => {
       expect(s.approveConsent).toHaveBeenCalledTimes(2);
     });
 
-    it('a failing dialog counts as No', async () => {
+    it('a dialog that could not be shown approves nothing, and the user is asked again next time', async () => {
       const s = consentSetup(new BrokerError('dialog_failed', 'x'));
+      s.browser.authorize.mockImplementation(async () => { throw needsConsent(); });
       const e = await s.tm.getAccessToken(cred, res).catch((x) => x);
       expect(e.category).toBe('needs_consent');
       expect(s.grantConsent).not.toHaveBeenCalled();
+      await s.tm.getAccessToken(cred, res).catch(() => {});
+      expect(s.approveConsent).toHaveBeenCalledTimes(2);
     });
 
     it('reports why granting failed', async () => {

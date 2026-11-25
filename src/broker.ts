@@ -108,8 +108,8 @@ function isCutList(v: unknown): v is { truncated: true; totalItems: number; show
 
 /**
  * Builds the question asked when Microsoft wants an app approved for a tenant: a Yes/No dialog naming
- * the app, the tenant and every permission. Anything but an explicit Yes (No, timeout, dialog failure,
- * a request too long to show in full) is a No.
+ * the app, the tenant and every permission. Anything but an explicit Yes (No, timeout, a request too long
+ * to show in full) is a No. If the dialog cannot be shown it throws, so that is not mistaken for an answer.
  */
 export function makeConsentApprover(deps: {
   confirm: (r: ApprovalRequest) => Promise<boolean>;
@@ -128,8 +128,10 @@ export function makeConsentApprover(deps: {
     if (action.length <= MAX_ACTION) {
       try {
         ok = await deps.confirm({ tenant, account: escapeForDisplay(r.account), action });
-      } catch {
-        ok = false;
+      } catch (e) {
+        // Not an answer: the box could not be shown. The caller may ask again later.
+        deps.audit.write({ type: 'error', tenant: r.alias, detail: `consent dialog failed: ${r.appName}` });
+        throw e;
       }
     }
     deps.audit.write({ type: ok ? 'consent_approved' : 'consent_denied', tenant: r.alias, detail: r.appName });
@@ -192,12 +194,13 @@ export class Broker {
   ): Promise<string> {
     return this.run(tenant, async () => {
       // Everything that can be checked without the vault is checked first.
-      const checked = checkService(service, opts.site);
+      const checked = checkService(service, opts.site ?? undefined);
       validateCmdlet(cmdlet);
       const params = validateParameters(parameters ?? {});
       assertNoForbiddenCommon(params);
-      const select = validateSelect(opts.select);
-      const first = validateFirst(opts.first);
+      // Some models send null for options they are not using.
+      const select = validateSelect(opts.select ?? undefined);
+      const first = validateFirst(opts.first ?? undefined);
       const where = checked.site ? `${checked.service} ${checked.site}` : checked.service;
       const action = isCmdletRead(cmdlet, params) ? undefined : `[${escapeForDisplay(where)}] ${cmdletAction(cmdlet, params)}`;
       if (action !== undefined) assertShowable(action);
@@ -224,10 +227,11 @@ export class Broker {
         ...(first !== undefined ? { first } : {}),
       });
       const capped = capResult(out.result, { total: out.total });
+      const warnings = out.warnings ? { warnings: out.warnings } : {};
       if (isCutList(capped)) {
-        return { result: capped.items, truncated: true, totalItems: capped.totalItems, shownItems: capped.shownItems, note: capped.note };
+        return { result: capped.items, truncated: true, totalItems: capped.totalItems, shownItems: capped.shownItems, note: capped.note, ...warnings };
       }
-      return { result: capped, ...(out.note ? { note: out.note } : {}) };
+      return { result: capped, ...(out.note ? { note: out.note } : {}), ...warnings };
     });
   }
 
