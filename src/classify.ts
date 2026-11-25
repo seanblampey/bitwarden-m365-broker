@@ -42,21 +42,55 @@ export function isGraphRead(method: GraphMethod): boolean {
 }
 
 const CMDLET_RE = /^[A-Z][a-z]+-[A-Za-z0-9]+$/;
-const DENIED_VERBS = new Set(['Invoke', 'Start', 'Stop', 'Import', 'Export', 'Out']);
-const DENIED_NAMES = new Set(['Add-Type', 'New-Object', 'Set-ExecutionPolicy']);
+// Connect/Disconnect: the broker owns every session. The rest could run code or touch local files.
+const DENIED_VERBS = new Set(['Invoke', 'Start', 'Stop', 'Import', 'Export', 'Out', 'Connect', 'Disconnect']);
+const DENIED_NAMES = new Set([
+  'Add-Type', 'New-Object', 'Set-ExecutionPolicy',
+  // PnP: hands back the live connection (with its token) / reads or writes local files.
+  'Get-PnPConnection', 'Get-PnPFile',
+]);
+/** Cmdlets that return or store secrets, in any module (Get-PnPAccessToken, Get-PnPStoredCredential, ...). */
+const DENIED_PATTERN = /AccessToken|Token$|Credential|Secret|Password|Certificate/i;
 
-/** Name-shape check only; the real Exchange guarantee is the module-origin check in the PowerShell script. */
+/**
+ * Name rules shared by every admin service. The guarantee that a cmdlet belongs to the service's
+ * own module is the module-origin check in the PowerShell script.
+ */
 export function validateCmdlet(name: string): void {
   if (typeof name !== 'string' || name.length > 100 || !CMDLET_RE.test(name)) {
     throw new BrokerError('invalid_cmdlet', 'Invalid cmdlet name: expected Verb-Noun (letters and digits only)');
   }
-  if (DENIED_VERBS.has(name.split('-')[0]) || DENIED_NAMES.has(name)) {
+  if (DENIED_VERBS.has(name.split('-')[0]) || DENIED_NAMES.has(name) || DENIED_PATTERN.test(name)) {
     throw new BrokerError('invalid_cmdlet', 'This cmdlet is not permitted');
   }
 }
 
-export function isCmdletRead(name: string): boolean {
-  return name.startsWith('Get-');
+/** Parameters that make a cmdlet read or write a file on this PC. */
+const LOCAL_FILE_PARAMS = new Set(['out', 'outfile', 'outputfile', 'outputpath', 'path', 'literalpath', 'filepath', 'folder']);
+
+/** A read runs without approval: a Get- cmdlet that names no local file. */
+export function isCmdletRead(name: string, parameters: Record<string, unknown> = {}): boolean {
+  if (!name.startsWith('Get-')) return false;
+  return !Object.keys(parameters).some((k) => LOCAL_FILE_PARAMS.has(k.toLowerCase()));
+}
+
+const SELECT_RE = /^[A-Za-z][A-Za-z0-9_.]*$/;
+
+/** Property names for Select-Object; plain names only, never expressions. */
+export function validateSelect(v: unknown): string[] | undefined {
+  if (v === undefined) return undefined;
+  const ok = Array.isArray(v) && v.length > 0 && v.length <= 50
+    && v.every((x) => typeof x === 'string' && x.length <= 100 && SELECT_RE.test(x));
+  if (!ok) throw new BrokerError('invalid_parameters', 'Invalid parameters: select must be 1 to 50 plain property names');
+  return v as string[];
+}
+
+export function validateFirst(v: unknown): number | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 1000) {
+    throw new BrokerError('invalid_parameters', 'Invalid parameters: first must be a whole number from 1 to 1000');
+  }
+  return v;
 }
 
 const KEY_RE = /^[A-Za-z][A-Za-z0-9]*$/;

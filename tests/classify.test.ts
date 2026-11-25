@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildGraphUrl, isCmdletRead, isGraphRead, validateCmdlet, validateParameters } from '../src/classify.js';
+import { buildGraphUrl, isCmdletRead, isGraphRead, validateCmdlet, validateFirst, validateParameters, validateSelect } from '../src/classify.js';
+import { BrokerError } from '../src/errors.js';
 
 describe('buildGraphUrl', () => {
   it('builds urls on graph.microsoft.com', () => {
@@ -65,5 +66,46 @@ describe('validateParameters', () => {
     for (const bad of [{ 'Bad Key': 1 }, { '-Identity': 'x' }, null, [1], 'x', undefined, { A: undefined }, { A: () => 1 }, { A: NaN }, { A: new Date() }]) {
       expect(() => validateParameters(bad)).toThrow(expect.objectContaining({ code: 'invalid_parameters' }));
     }
+  });
+});
+
+describe('admin cmdlet rules', () => {
+  it('refuses session, token, credential and local-file cmdlets for every service', () => {
+    for (const bad of [
+      'Connect-PnPOnline', 'Connect-MicrosoftTeams', 'Disconnect-ExchangeOnline', 'Get-PnPAccessToken',
+      'Get-PnPGraphAccessToken', 'Get-PnPAppAuthAccessToken', 'Request-PnPAccessToken', 'Get-PnPStoredCredential',
+      'Add-PnPStoredCredential', 'Get-PnPConnection', 'Get-PnPFile', 'Get-PnPAzureCertificate', 'Get-CsOnlineLisCivicAddressSecret',
+    ]) {
+      let err: unknown;
+      try { validateCmdlet(bad); } catch (e) { err = e; }
+      expect((err as BrokerError | undefined)?.code, bad).toBe('invalid_cmdlet');
+    }
+  });
+
+  it('accepts ordinary cmdlets from each service', () => {
+    for (const ok of ['Get-PnPTenantSite', 'Set-PnPTenant', 'Get-CsTeamsMeetingPolicy', 'Get-RetentionCompliancePolicy', 'Get-Mailbox', 'Remove-PnPList']) {
+      expect(() => validateCmdlet(ok), ok).not.toThrow();
+    }
+  });
+
+  it('treats a Get- cmdlet with a local-file parameter as needing approval', () => {
+    expect(isCmdletRead('Get-Mailbox', { Identity: 'a' })).toBe(true);
+    expect(isCmdletRead('Get-Mailbox')).toBe(true);
+    expect(isCmdletRead('Set-Mailbox', {})).toBe(false);
+    for (const p of ['Out', 'OutFile', 'outputfile', 'OutputPath', 'Path', 'LiteralPath', 'FilePath', 'Folder']) {
+      expect(isCmdletRead('Get-PnPSiteTemplate', { [p]: 'c:\\x' }), p).toBe(false);
+    }
+  });
+
+  it('validates select and first', () => {
+    expect(validateSelect(undefined)).toBeUndefined();
+    expect(validateSelect(['DisplayName', 'Owner.Email', 'a_b'])).toEqual(['DisplayName', 'Owner.Email', 'a_b']);
+    for (const bad of ['x', [1], ['a b'], ['$x'], ['a;b'], ['@{n=1}'], [], Array(51).fill('a')]) {
+      expect(() => validateSelect(bad), JSON.stringify(bad)).toThrow(/Invalid parameters/);
+    }
+    expect(validateFirst(undefined)).toBeUndefined();
+    expect(validateFirst(1)).toBe(1);
+    expect(validateFirst(1000)).toBe(1000);
+    for (const bad of [0, 1001, 1.5, '5', -1, NaN]) expect(() => validateFirst(bad), String(bad)).toThrow(/Invalid parameters/);
   });
 });
