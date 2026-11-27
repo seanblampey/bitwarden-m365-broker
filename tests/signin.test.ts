@@ -6,6 +6,7 @@ import { startFakeLogin, type FakeLogin, type FakeLoginOpts } from './fixtures/f
 import { totp } from '../src/crypto.js';
 import { TokenManager } from '../src/auth/tokens.js';
 import { Redactor } from '../src/redact.js';
+import { BrokerError } from '../src/errors.js';
 
 const SEED = 'JBSWY3DPEHPK3PXP';
 const USER = 'admin@contoso.com';
@@ -275,6 +276,45 @@ describe('SignInBrowser.authorize', () => {
       const { browser, params } = await setup({ consent: true, wrongState: true });
       expect((await category(browser.grantConsent(params()))).category).toBe('page_changed');
     });
+  });
+});
+
+describe('SignInBrowser after its browser or a context has gone away', () => {
+  const internals = (b: SignInBrowser) => b as unknown as { browser: { close(): Promise<void> }; contexts: Map<string, { close(): Promise<void> }> };
+
+  it('a browser that died fails with browser_failed, never a raw Playwright error, and reports it is no longer connected', async () => {
+    const { browser, params } = await setup();
+    await browser.authorize(params());
+    expect(browser.isConnected()).toBe(true);
+    await internals(browser).browser.close();
+    const err = await browser.authorize(params()).catch((e) => e);
+    expect(err).toBeInstanceOf(BrokerError);
+    expect(err.code).toBe('browser_failed');
+    expect(err.message).not.toMatch(/Target page|browserContext|playwright/i);
+    expect(browser.isConnected()).toBe(false);
+  });
+
+  it('a closed account context is replaced by a fresh one', async () => {
+    const { site, browser, params } = await setup();
+    await browser.authorize(params());
+    await internals(browser).contexts.get(USER)!.close();
+    const views = site.passwordPageViews();
+    expect((await browser.authorize(params())).code).toMatch(/^CODE-/);
+    // a fresh context has no session, so it signs in again
+    expect(site.passwordPageViews()).toBe(views + 1);
+  });
+
+  it('forget(username) throws away that account\'s session, so the next sign-in starts clean', async () => {
+    const { site, browser, params } = await setup({ users: { [USER2]: PASS2 } });
+    await browser.authorize(params());
+    await browser.authorize(params('graph', USER2, PASS2));
+    const views = site.passwordPageViews();
+    await browser.forget(USER.toUpperCase());
+    await browser.authorize(params());
+    expect(site.passwordPageViews()).toBe(views + 1);
+    // the other account keeps its session
+    await browser.authorize(params('exo', USER2, PASS2));
+    expect(site.passwordPageViews()).toBe(views + 1);
   });
 });
 

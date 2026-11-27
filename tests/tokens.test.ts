@@ -181,6 +181,39 @@ describe('TokenManager', () => {
     expect(s.browser.close).toHaveBeenCalledOnce();
   });
 
+  it('launches a new browser when the previous one is no longer connected', async () => {
+    const s = setup([() => tokenResp(1), () => tokenResp(2)]);
+    let connected = true;
+    Object.assign(s.browser, { isConnected: () => connected });
+    await s.tm.getAccessToken(cred, res);
+    connected = false;
+    await s.tm.drop('acme');
+    await s.tm.getAccessToken(cred, res);
+    expect(s.getBrowser).toHaveBeenCalledTimes(2);
+  });
+
+  it('turns an unexpected error from the sign-in browser into browser_failed and audits its stack', async () => {
+    const write = vi.fn();
+    const s = setup([() => tokenResp(1)], { audit: { write } });
+    s.browser.authorize.mockImplementationOnce(async () => { throw new Error('page.goto: Target page, context or browser has been closed'); });
+    const err = await s.tm.getAccessToken(cred, res).catch((e) => e);
+    expect(err).toBeInstanceOf(BrokerError);
+    expect(err.code).toBe('browser_failed');
+    expect(err.message).not.toContain('Target page');
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({ type: 'error', tenant: 'acme', detail: expect.stringContaining('Target page, context or browser has been closed') }));
+    // the next call works
+    expect((await s.tm.getAccessToken(cred, res)).upn).toBe('admin@acme.com');
+  });
+
+  it('drop(alias) also throws away that account\'s browser session', async () => {
+    const s = setup([() => tokenResp(1)]);
+    const forget = vi.fn(async () => {});
+    Object.assign(s.browser, { forget });
+    await s.tm.getAccessToken(cred, res);
+    await s.tm.drop('acme');
+    expect(forget).toHaveBeenCalledWith('Admin@acme.com');
+  });
+
   it('drop() after a failed launch does not throw', async () => {
     const s = setup([]);
     let fail!: (e: Error) => void;

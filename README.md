@@ -117,6 +117,14 @@ Example: `{ "idleMinutes": 15 }`
 
 The audit log (what was called, approved or denied; never secrets) is at `%LOCALAPPDATA%\claude-bw-broker\audit.jsonl`. Claude is blocked from reading, editing or deleting it.
 
+When a tool returns `{"error":"internal"}` or `browser_failed`, the real exception is in that file. Open it yourself (Claude cannot), for example in PowerShell:
+
+```powershell
+Get-Content "$env:LOCALAPPDATA\claude-bw-broker\audit.jsonl" -Tail 20
+```
+
+Look for the newest line with `"type":"error"`. Its `detail` field holds the stack trace (secrets redacted). Sign-in browser failures start with `sign-in browser:`. `browser_failed` means Edge closed or crashed (for example during an Edge update, or because the window shown with `showSignInWindow` was closed): just try again, and the broker starts a fresh one. `disconnect` for a tenant also clears that account's session in the sign-in browser.
+
 ## Approving Microsoft's apps (consent)
 
 The broker signs in with Microsoft's own public apps. It never needs an app registration of your own:
