@@ -1,6 +1,6 @@
 {
   "name": "bitwarden-m365-broker",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "keywords": [
     "pi-package",
     "claude-code-plugin",

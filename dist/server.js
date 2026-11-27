@@ -37981,7 +37981,7 @@ var GRAPH_PREFIX = "https://graph.microsoft.com/";
 function adminConsentUrl(authority, tenant, resource, state) {
   const q = new URLSearchParams({
     client_id: resource.clientId,
-    scope: permissionScopes(resource).join(" "),
+    scope: resource.scopes.join(" "),
     redirect_uri: resource.redirectUri
   });
   if (state) q.set("state", state);
@@ -38017,10 +38017,16 @@ var SEL = {
   proofUp: "#idSubmit_ProofUp_Redirect",
   heading: "#loginHeader, [role=heading], h1, .text-title, #idDiv_SAOTCAS_Title"
 };
+var ACTIVE = ':not([aria-hidden="true"]):not([aria-hidden="true"] *)';
+var FIELD = `${ACTIVE}:not([tabindex="-1"])`;
+var activeSelector = (sel, suffix = FIELD) => sel.split(",").map((x) => `${x.trim()}${suffix}`).join(", ");
+var active = (page, sel, suffix = FIELD) => page.locator(activeSelector(sel, suffix)).filter({ visible: true }).first();
+var ORG_CONSENT = /on behalf of (your|the) organi[sz]ation/i;
+var CONSENT_HEADING = /^\s*permissions requested/i;
 var AADSTS = /AADSTS\d{5,6}/;
 var clip = (t, n = 80) => (t ?? "").replace(/\s+/g, " ").trim().slice(0, n);
 async function headingText(page) {
-  for (const el of await page.locator(SEL.heading).all().catch(() => [])) {
+  for (const el of await page.locator(activeSelector(SEL.heading, ACTIVE)).all().catch(() => [])) {
     if (await el.isVisible().catch(() => false)) {
       const t = clip(await el.innerText().catch(() => ""));
       if (t) return t;
@@ -38042,7 +38048,12 @@ async function describe3(page) {
   return [where, title && `title "${title}"`, heading && heading !== title && `heading "${heading}"`, code].filter(Boolean).join(", ") || "no page loaded";
 }
 var accountTile = (username) => `[data-test-id=${JSON.stringify(username)} i]`;
-var visible = (page, sel) => page.locator(sel).first().isVisible().catch(() => false);
+var visible = (page, sel, suffix = ACTIVE) => active(page, sel, suffix).isVisible().catch(() => false);
+async function consentShown(page) {
+  if (await visible(page, SEL.consent)) return true;
+  if (await page.locator(activeSelector(SEL.heading, ACTIVE)).filter({ hasText: CONSENT_HEADING, visible: true }).count().catch(() => 0)) return true;
+  return page.getByRole("checkbox", { name: ORG_CONSENT }).first().isVisible().catch(() => false);
+}
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function detectState(page, authorityHost, username) {
   let url2;
@@ -38051,14 +38062,13 @@ async function detectState(page, authorityHost, username) {
   } catch {
   }
   if (url2 && /\/consent/i.test(url2.pathname)) return "consent";
-  if (await visible(page, SEL.consent)) return "consent";
   if (url2 && /^https?:$/.test(url2.protocol) && url2.host !== authorityHost) return "federated";
+  if (await consentShown(page)) return "consent";
   const heading = (await headingText(page)).toLowerCase();
-  if (heading.startsWith("permissions requested")) return "consent";
   if (/^(need admin approval|approval required)/.test(heading)) return "needs_admin";
   if (await visible(page, SEL.proofUp) || /^(more information required|action required|let's keep your account secure)/.test(heading)) return "proof_up";
   if (await visible(page, SEL.passwordError)) return "password_error";
-  if (await page.locator(SEL.kmsi).count().catch(() => 0) > 0 && await visible(page, SEL.back)) return "kmsi";
+  if (await page.locator(activeSelector(SEL.kmsi, ACTIVE)).count().catch(() => 0) > 0 && await visible(page, SEL.back)) return "kmsi";
   if (await visible(page, SEL.otc)) return "otc";
   if (await visible(page, SEL.otpProof)) return "pick_otp";
   if (await visible(page, SEL.pushTitle) || await visible(page, SEL.pushProof)) return "other_mfa";
@@ -38212,7 +38222,9 @@ var SignInBrowser = class _SignInBrowser {
       return result2;
     } catch (e) {
       if (e instanceof BrokerError) throw e;
-      throw new SignInError("page_changed", `${await describe3(page)} (an expected button or field did not respond)`);
+      const detail = `${await describe3(page)} (an expected button or field did not respond)`;
+      if (await consentShown(page).catch(() => false)) throw new SignInError("needs_consent", detail, consentHelp(authority, p.tenant, p.resource));
+      throw new SignInError("page_changed", detail);
     } finally {
       context.off("request", onRequest);
       await context.unroute(matcher, handler).catch(() => {
@@ -38251,18 +38263,20 @@ var SignInBrowser = class _SignInBrowser {
       }
       const n = (actions.get(state) ?? 0) + 1;
       actions.set(state, n);
-      if (n > 3) return { category: "page_changed", detail: `${await describe3(page)} (still there after 3 tries)` };
+      if (n > 3) return { category: state === "consent" ? "needs_consent" : "page_changed", detail: `${await describe3(page)} (still there after 3 tries)` };
       marker = Date.now();
       await page.evaluate((m) => {
         window.__sib = m;
       }, marker).catch(() => {
       });
       switch (state) {
-        case "consent":
-          if (!acceptConsent) return { category: "needs_consent" };
+        case "consent": {
+          if (!acceptConsent) return { category: "needs_consent", detail: await describe3(page) };
           if (!onAuthority(page, authorityHost)) return { category: "federated", detail: await describe3(page) };
-          await page.locator(SEL.next).first().click();
+          const stuck = await this.acceptConsent(page, left());
+          if (stuck) return { category: "needs_consent", detail: `${await describe3(page)} (${stuck})` };
           break;
+        }
         case "needs_admin":
           return { category: "consent_not_allowed" };
         case "federated":
@@ -38277,35 +38291,58 @@ var SignInBrowser = class _SignInBrowser {
         case "password_error":
           return { category: "wrong_password" };
         case "username":
-          await page.locator(SEL.loginfmt).first().fill(p.username);
-          await page.locator(SEL.next).first().click();
+          await active(page, SEL.loginfmt).fill(p.username);
+          await active(page, SEL.next).click();
           break;
         case "password":
           if (!onAuthority(page, authorityHost)) return { category: "federated" };
-          await page.locator(SEL.passwd).first().fill(p.password);
-          await page.locator(SEL.next).first().click();
+          await active(page, SEL.passwd).fill(p.password);
+          await active(page, SEL.next).click();
           break;
         case "otc":
           if (!onAuthority(page, authorityHost)) return { category: "federated" };
-          await page.locator(SEL.otc).first().fill(totp(p.totpSeed));
-          await page.locator(SEL.otcSubmit).first().click();
+          await active(page, SEL.otc).fill(totp(p.totpSeed));
+          await active(page, SEL.otcSubmit).click();
           break;
         case "pick_otp":
-          await page.locator(SEL.otpProof).first().click();
+          await active(page, SEL.otpProof, ACTIVE).click();
           break;
         case "other_mfa":
           if (!await visible(page, SEL.otherWay)) return { category: "mfa_not_totp" };
-          await page.locator(SEL.otherWay).first().click();
+          await active(page, SEL.otherWay, ACTIVE).click();
           break;
         case "kmsi":
-          await page.locator(SEL.back).first().click();
+          await active(page, SEL.back).click();
           break;
         case "account_tile":
-          await page.locator(accountTile(p.username)).first().click();
+          await active(page, accountTile(p.username), ACTIVE).click();
           break;
       }
     }
     return outcome() ?? { category: "page_changed", detail: `${await describe3(page)} (timed out)` };
+  }
+  /**
+   * On the consent page, after the user's Yes: ticks "Consent on behalf of your organization" when the page has it
+   * (without it, Accept approves the app for this one account and Microsoft asks again for everyone else), then
+   * clicks the visible Accept. Returns why it could not, or undefined once Accept was clicked.
+   */
+  async acceptConsent(page, timeoutMs) {
+    const org = page.getByRole("checkbox", { name: ORG_CONSENT }).first();
+    if (await org.isVisible().catch(() => false)) {
+      if (!await org.isChecked().catch(() => false)) {
+        await org.check({ timeout: 2e3 }).catch(() => page.getByText(ORG_CONSENT).first().click({ timeout: 2e3 }).catch(() => {
+        }));
+      }
+      if (!await org.isChecked().catch(() => false)) return 'could not tick "Consent on behalf of your organization"';
+    }
+    const accept = page.getByRole("button", { name: /^\s*accept\s*$/i }).or(page.locator(activeSelector(SEL.next))).filter({ visible: true }).first();
+    try {
+      await accept.waitFor({ state: "visible", timeout: Math.min(timeoutMs, 5e3) });
+    } catch {
+      return "no Accept button found";
+    }
+    await accept.click();
+    return void 0;
   }
   async close() {
     const contexts = [...this.contexts.values()];

@@ -32,6 +32,16 @@ export interface FakeLoginOpts {
   adminConsentError?: string;
   /** Show "Pick an account" whenever a session exists, even without prompt=select_account. */
   alwaysPicker?: boolean;
+  /**
+   * Serve consent the way login.microsoftonline.com does: at /<tenant>/reprocess, titled "Sign in to your account",
+   * heading "Permissions requested" + "Review for your organization", with the previous (inactive) step still in the
+   * DOM underneath: aria-hidden, tabindex -1, opacity 0, and its own #idSIButton9 first in document order.
+   */
+  realConsentPage?: boolean;
+  /** The consent page has a "Consent on behalf of your organization" checkbox; Accept without it grants nothing org-wide. */
+  orgCheckbox?: boolean;
+  /** The real consent page shows no Accept button (only the hidden duplicate from the previous step). */
+  noVisibleAccept?: boolean;
 }
 
 export interface FakeLogin {
@@ -43,9 +53,14 @@ export interface FakeLogin {
   /** How many times Accept was posted on the admin-consent page, and the last scope it was asked for. */
   adminAccepts: () => number;
   lastAdminConsentScope: () => string | undefined;
+  /** Accepts posted with the org-wide checkbox left unticked (consent for the signed-in user only). */
+  selfOnlyAccepts: () => number;
 }
 
-interface Flow { redirectUri: string; hint: string; state: string; user?: string; clientId?: string; adminConsent?: boolean }
+interface Flow { redirectUri: string; hint: string; state: string; user?: string; clientId?: string; adminConsent?: boolean; scope?: string; tenant?: string }
+
+/** offline_access is implied by any delegated grant; every other requested scope must have been granted. */
+const needsGrant = (scope: string | undefined) => (scope ?? '').split(' ').filter((x) => x && x !== 'offline_access');
 
 const page = (body: string) =>
   `<!doctype html><html><body>${body}</body></html>`;
@@ -66,8 +81,13 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
   let port = 0;
   let adminAccepts = 0;
   let adminScope: string | undefined;
-  /** Client IDs an admin has approved for the organisation; `consent` no longer applies to them. */
-  const granted = new Set<string>();
+  let selfOnly = 0;
+  /**
+   * Scopes an admin has approved for the organisation, per client ID. Like Entra, `consent` keeps asking
+   * while the authorize request names any scope (other than offline_access) not granted yet: incremental consent.
+   */
+  const granted = new Map<string, Set<string>>();
+  const isGranted = (f: Flow) => needsGrant(f.scope).every((x) => granted.get(f.clientId ?? '')?.has(x));
 
   const send = (res: ServerResponse, html: string, headers: Record<string, string> = {}) => {
     res.writeHead(200, { 'content-type': 'text/html', ...headers });
@@ -103,10 +123,27 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
   const adminConsentPage = (id: string) =>
     opts.notAdmin
       ? page('<div id="loginHeader" role="heading">Need admin approval</div><p>This app needs permission that only an admin can grant.</p>')
+      : opts.realConsentPage ? realConsentPage(id)
       : page(`<div role="heading">Permissions requested</div><p>Review for your organization</p><form method="post" action="/adminconsent/accept"><input type="hidden" name="flow" value="${id}"><input type="button" id="idBtn_Back" value="Cancel"><input type="submit" id="idSIButton9" value="Accept"></form>`);
+  /** Microsoft's single-page layout: the inactive step sits underneath the active one, hidden but still in the DOM. */
+  const realConsentPage = (id: string) =>
+    `<!doctype html><html><head><title>Sign in to your account</title></head><body>`
+    + `<div style="position:relative;width:440px;height:340px">`
+    + `<div aria-hidden="true" style="position:absolute;inset:0;opacity:0"><form method="post" action="/stale-step">`
+    + `<div role="heading">Stay signed in?</div><input type="checkbox" tabindex="-1" aria-hidden="true">`
+    + `<input type="submit" id="idSIButton9" tabindex="-1" value="Yes"></form></div>`
+    + `<div style="position:absolute;inset:0;background:#fff">`
+    + `<div role="heading" id="consentHeaderTitle">Permissions requested<div>Review for your organization</div></div>`
+    + `<p>Microsoft Graph Command Line Tools</p>`
+    + `<form method="post" action="/adminconsent/accept"><input type="hidden" name="flow" value="${id}">`
+    + (opts.orgCheckbox ? `<input type="checkbox" id="orgConsent" name="org" value="1"><label for="orgConsent">Consent on behalf of your organization</label>` : '')
+    + `<input type="button" id="idBtn_Back" value="Cancel">${opts.noVisibleAccept ? '' : '<input type="submit" id="idSIButton9" value="Accept">'}</form>`
+    + `</div></div></body></html>`;
   const afterKmsi = (res: ServerResponse, id: string, f: Flow) => {
-    if (f.adminConsent) return send(res, adminConsentPage(id));
-    if (opts.consent && !granted.has(f.clientId ?? '')) return redirect(res, `/Consent/Set?flow=${id}`);
+    if (f.adminConsent) {
+      return opts.realConsentPage ? redirect(res, `/${f.tenant}/reprocess?flow=${id}`) : send(res, adminConsentPage(id));
+    }
+    if (opts.consent && !isGranted(f)) return redirect(res, opts.realConsentPage ? `/${f.tenant}/reprocess?flow=${id}` : `/Consent/Set?flow=${id}`);
     finish(res, f);
   };
 
@@ -118,7 +155,7 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
     if (req.method === 'GET' && /\/v2\.0\/adminconsent$/.test(path)) {
       const f: Flow = {
         redirectUri: u.searchParams.get('redirect_uri') ?? '', hint: '', state: u.searchParams.get('state') ?? '',
-        clientId: u.searchParams.get('client_id') ?? '', adminConsent: true,
+        clientId: u.searchParams.get('client_id') ?? '', adminConsent: true, tenant: path.split('/')[1],
       };
       adminScope = u.searchParams.get('scope') ?? undefined;
       if (opts.adminConsentError) {
@@ -128,14 +165,22 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
       const id = randomBytes(8).toString('hex');
       flows.set(id, f);
       const session = decodeURIComponent(/fakesession=([^;]*)/.exec(cookie)?.[1] ?? '').split(',').filter(Boolean);
-      if (session.length) return send(res, adminConsentPage(id));
+      if (session.length) return afterKmsi(res, id, f);
       return send(res, page(form(id, 'user', '<input name="loginfmt" type="email"><input type="submit" id="idSIButton9" value="Next">')));
     }
     if (req.method === 'POST' && path === '/adminconsent/accept') {
-      adminAccepts++;
-      const f = flows.get((await body(req)).get('flow') ?? '');
+      const b = await body(req);
+      const f = flows.get(b.get('flow') ?? '');
       if (!f) return send(res, page('gone'));
-      granted.add(f.clientId ?? '');
+      if (opts.orgCheckbox && b.get('org') !== '1') {
+        // Accepted for this user only: nothing is approved for the organisation.
+        selfOnly++;
+        return send(res, realConsentPage(b.get('flow') ?? ''));
+      }
+      adminAccepts++;
+      const set = granted.get(f.clientId ?? '') ?? new Set<string>();
+      for (const x of needsGrant(adminScope)) set.add(x);
+      granted.set(f.clientId ?? '', set);
       const q = new URLSearchParams({ admin_consent: 'True', tenant: 'contoso.com', state: state(f) });
       // Like Entra, the admin who just signed in to approve the app now has a session.
       if (f.user) sessionUsers = [...new Set([...sessionUsers, f.user])];
@@ -145,7 +190,7 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
     if (req.method === 'GET' && /\/oauth2\/v2\.0\/authorize$/.test(path)) {
       const f: Flow = {
         redirectUri: u.searchParams.get('redirect_uri') ?? '', hint: u.searchParams.get('login_hint') ?? '', state: u.searchParams.get('state') ?? '',
-        clientId: u.searchParams.get('client_id') ?? '',
+        clientId: u.searchParams.get('client_id') ?? '', scope: u.searchParams.get('scope') ?? '', tenant: path.split('/')[1],
       };
       if (opts.error) {
         const q = new URLSearchParams({ error: 'access_denied', error_description: `${opts.error}: blocked for ${f.hint}`, state: state(f) });
@@ -155,7 +200,7 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
       if (opts.unknownPage) return send(res, page('<h1>Something new</h1><p>Unrecognised page.</p>'));
       if (opts.aadErrorPage) return send(res, page(`<div id="loginHeader" role="heading">Sign in</div><p>Sorry, but we're having trouble signing you in.</p><p>${opts.aadErrorPage}: User account '${f.hint}' does not exist in tenant.</p>`));
       if (opts.proofUp) return send(res, page('<div id="loginHeader" role="heading">More information required</div><input type="submit" id="idSubmit_ProofUp_Redirect" value="Next">'));
-      if (opts.consentHeading && !granted.has(f.clientId ?? '')) return send(res, page('<div role="heading">Permissions requested</div><form method="post" action="/consent/accept"><input type="submit" id="idSIButton9" value="Accept"></form>'));
+      if (opts.consentHeading && !isGranted(f)) return send(res, page('<div role="heading">Permissions requested</div><form method="post" action="/consent/accept"><input type="submit" id="idSIButton9" value="Accept"></form>'));
       const id = randomBytes(8).toString('hex');
       flows.set(id, f);
       const session = decodeURIComponent(/fakesession=([^;]*)/.exec(cookie)?.[1] ?? '').split(',').filter(Boolean);
@@ -175,6 +220,10 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
       return send(res, page(form(id, 'user', '<input name="loginfmt" type="email"><input type="submit" id="idSIButton9" value="Next">')));
     }
     if (req.method === 'GET' && path === '/adfs/ls') return send(res, page('<form><input name="UserName"><input name="Password" type="password"></form>'));
+    if (req.method === 'GET' && /^\/[^/]+\/reprocess$/.test(path)) {
+      const id = u.searchParams.get('flow') ?? '';
+      return send(res, flows.get(id)?.adminConsent ? adminConsentPage(id) : realConsentPage(id));
+    }
     if (req.method === 'GET' && path === '/Consent/Set') {
       const id = u.searchParams.get('flow') ?? '';
       return send(res, page(`<h1 id="consentHeader">Permissions requested</h1><form method="post" action="/consent/accept"><input type="hidden" name="flow" value="${id}"><input type="submit" id="idBtn_Accept" value="Accept"></form>`));
@@ -233,5 +282,6 @@ export async function startFakeLogin(opts: FakeLoginOpts): Promise<FakeLogin> {
     passwordPageViews: () => pwViews,
     adminAccepts: () => adminAccepts,
     lastAdminConsentScope: () => adminScope,
+    selfOnlyAccepts: () => selfOnly,
   };
 }
