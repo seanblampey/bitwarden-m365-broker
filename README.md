@@ -138,6 +138,14 @@ The broker only ever asks for the apps above, with the permissions fixed in its 
 
 If the account cannot approve apps, the result is `consent_not_allowed`: it needs the Global Administrator, Privileged Role Administrator or Cloud Application Administrator role.
 
+If Microsoft's consent page shows a **Consent on behalf of your organization** box, the broker ticks it before Accept (after your Yes). Without it, Accept approves the app for that one account only, and Microsoft keeps asking. If the broker cannot finish the page itself (no usable Accept button, or the box will not tick), it returns `needs_consent` with the manual steps instead of `page_changed`.
+
+### If the consent page keeps coming back
+
+The consent link and the one-click approval ask for exactly the scopes sign-in asks for: the `graphScopes` permissions plus `openid`, `profile` and `offline_access`. Before 0.5.1 the link left out `openid` and `profile`. In a tenant where nobody had approved those for the app, sign-in kept going back to "Permissions requested" however often an admin approved. The broker never sends `prompt=consent`. If you add a permission to `graphScopes`, Microsoft asks once more for the new permission (incremental consent). That is expected: approve it once for the tenant.
+
+To check what a tenant has approved: Entra admin center > Enterprise applications > the app (for example Microsoft Graph Command Line Tools) > Permissions. Look under **Admin consent**: permissions listed only under **User consent** were approved for one account, not the organisation.
+
 ## Using it
 
 Each Bitwarden item in the folder appears under its own name. If two items share a name, they appear as "name (username)", with "#2", "#3" added if that still repeats, so every name `list_tenants` returns is unique.

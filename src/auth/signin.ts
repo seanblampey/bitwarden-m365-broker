@@ -38,11 +38,15 @@ export class SignInError extends BrokerError {
 
 const GRAPH_PREFIX = 'https://graph.microsoft.com/';
 
-/** Microsoft's admin-consent page for one app and its permission scopes in one tenant. */
+/**
+ * Microsoft's admin-consent page for one app in one tenant. It asks for every scope sign-in asks for,
+ * OpenID Connect ones included: a grant without `openid`/`profile` sends the next sign-in straight back
+ * to a consent page (incremental consent), however often the admin approves.
+ */
 export function adminConsentUrl(authority: string, tenant: string, resource: Resource, state?: string): string {
   const q = new URLSearchParams({
     client_id: resource.clientId,
-    scope: permissionScopes(resource).join(' '),
+    scope: resource.scopes.join(' '),
     redirect_uri: resource.redirectUri,
   });
   if (state) q.set('state', state);
@@ -110,11 +114,28 @@ const SEL = {
   heading: '#loginHeader, [role=heading], h1, .text-title, #idDiv_SAOTCAS_Title',
 };
 
+/**
+ * Microsoft's sign-in is one page that keeps each finished step in the DOM, hidden with aria-hidden="true",
+ * tabindex="-1" and opacity 0, often underneath the current one and earlier in document order. Playwright counts
+ * opacity 0 as visible, so a plain `.first()` can pick the old step's heading or its #idSIButton9 (whose click then
+ * waits on the covering step until it times out). Every selector the broker reads or acts on skips them.
+ */
+const ACTIVE = ':not([aria-hidden="true"]):not([aria-hidden="true"] *)';
+/** Inputs and buttons of an inactive step are also taken out of the tab order. */
+const FIELD = `${ACTIVE}:not([tabindex="-1"])`;
+/** Applies `suffix` to every part of a selector list. Selectors here never contain a comma inside a part. */
+const activeSelector = (sel: string, suffix: string = FIELD) => sel.split(',').map((x) => `${x.trim()}${suffix}`).join(', ');
+const active = (page: Page, sel: string, suffix: string = FIELD) => page.locator(activeSelector(sel, suffix)).filter({ visible: true }).first();
+
+/** The "Consent on behalf of your organization" box on the consent page Microsoft shows admins at sign-in. */
+const ORG_CONSENT = /on behalf of (your|the) organi[sz]ation/i;
+const CONSENT_HEADING = /^\s*permissions requested/i;
+
 const AADSTS = /AADSTS\d{5,6}/;
 const clip = (t: string | null | undefined, n = 80) => (t ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
 
 async function headingText(page: Page): Promise<string> {
-  for (const el of await page.locator(SEL.heading).all().catch(() => [])) {
+  for (const el of await page.locator(activeSelector(SEL.heading, ACTIVE)).all().catch(() => [])) {
     if (await el.isVisible().catch(() => false)) {
       const t = clip(await el.innerText().catch(() => ''));
       if (t) return t;
@@ -142,7 +163,14 @@ async function describe(page: Page): Promise<string> {
 /** The account-picker tile for a user. Microsoft writes the address in lower case; Bitwarden may not. */
 const accountTile = (username: string) => `[data-test-id=${JSON.stringify(username)} i]`;
 
-const visible = (page: Page, sel: string) => page.locator(sel).first().isVisible().catch(() => false);
+const visible = (page: Page, sel: string, suffix: string = ACTIVE) => active(page, sel, suffix).isVisible().catch(() => false);
+
+/** Microsoft's consent page, by any of its marks: a visible "Permissions requested" heading or the organisation box. */
+async function consentShown(page: Page): Promise<boolean> {
+  if (await visible(page, SEL.consent)) return true;
+  if (await page.locator(activeSelector(SEL.heading, ACTIVE)).filter({ hasText: CONSENT_HEADING, visible: true }).count().catch(() => 0)) return true;
+  return page.getByRole('checkbox', { name: ORG_CONSENT }).first().isVisible().catch(() => false);
+}
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Classify the current page; order matters (errors and consent win over input fields). */
@@ -150,14 +178,13 @@ async function detectState(page: Page, authorityHost: string, username: string):
   let url: URL | undefined;
   try { url = new URL(page.url()); } catch { /* about:blank etc. */ }
   if (url && /\/consent/i.test(url.pathname)) return 'consent';
-  if (await visible(page, SEL.consent)) return 'consent';
   if (url && /^https?:$/.test(url.protocol) && url.host !== authorityHost) return 'federated';
+  if (await consentShown(page)) return 'consent';
   const heading = (await headingText(page)).toLowerCase();
-  if (heading.startsWith('permissions requested')) return 'consent';
   if (/^(need admin approval|approval required)/.test(heading)) return 'needs_admin';
   if ((await visible(page, SEL.proofUp)) || /^(more information required|action required|let's keep your account secure)/.test(heading)) return 'proof_up';
   if (await visible(page, SEL.passwordError)) return 'password_error';
-  if ((await page.locator(SEL.kmsi).count().catch(() => 0)) > 0 && (await visible(page, SEL.back))) return 'kmsi';
+  if ((await page.locator(activeSelector(SEL.kmsi, ACTIVE)).count().catch(() => 0)) > 0 && (await visible(page, SEL.back))) return 'kmsi';
   if (await visible(page, SEL.otc)) return 'otc';
   if (await visible(page, SEL.otpProof)) return 'pick_otp';
   if ((await visible(page, SEL.pushTitle)) || (await visible(page, SEL.pushProof))) return 'other_mfa';
@@ -324,7 +351,10 @@ export class SignInBrowser {
     } catch (e) {
       // Playwright errors can quote selectors or page content: never pass them through.
       if (e instanceof BrokerError) throw e;
-      throw new SignInError('page_changed', `${await describe(page)} (an expected button or field did not respond)`);
+      const detail = `${await describe(page)} (an expected button or field did not respond)`;
+      // Stuck on the consent page: the person can still approve by hand, so say how instead of page_changed.
+      if (await consentShown(page).catch(() => false)) throw new SignInError('needs_consent', detail, consentHelp(authority, p.tenant, p.resource));
+      throw new SignInError('page_changed', detail);
     } finally {
       context.off('request', onRequest);
       await context.unroute(matcher, handler).catch(() => {});
@@ -362,17 +392,19 @@ export class SignInBrowser {
       }
       const n = (actions.get(state) ?? 0) + 1;
       actions.set(state, n);
-      if (n > 3) return { category: 'page_changed', detail: `${await describe(page)} (still there after 3 tries)` };
+      if (n > 3) return { category: state === 'consent' ? 'needs_consent' : 'page_changed', detail: `${await describe(page)} (still there after 3 tries)` };
       marker = Date.now();
       await page.evaluate((m) => { (window as any).__sib = m; }, marker).catch(() => {});
 
       switch (state) {
-        case 'consent':
-          if (!acceptConsent) return { category: 'needs_consent' };
+        case 'consent': {
+          if (!acceptConsent) return { category: 'needs_consent', detail: await describe(page) };
           // Reached only from grantConsent, i.e. after the user's explicit Yes; and only on Microsoft's own page.
           if (!onAuthority(page, authorityHost)) return { category: 'federated', detail: await describe(page) };
-          await page.locator(SEL.next).first().click();
+          const stuck = await this.acceptConsent(page, left());
+          if (stuck) return { category: 'needs_consent', detail: `${await describe(page)} (${stuck})` };
           break;
+        }
         case 'needs_admin': return { category: 'consent_not_allowed' };
         case 'federated': return { category: 'federated', detail: await describe(page) };
         case 'proof_up': return { category: 'mfa_setup_required' };
@@ -383,35 +415,60 @@ export class SignInBrowser {
         }
         case 'password_error': return { category: 'wrong_password' };
         case 'username':
-          await page.locator(SEL.loginfmt).first().fill(p.username);
-          await page.locator(SEL.next).first().click();
+          await active(page, SEL.loginfmt).fill(p.username);
+          await active(page, SEL.next).click();
           break;
         case 'password':
           if (!onAuthority(page, authorityHost)) return { category: 'federated' };
-          await page.locator(SEL.passwd).first().fill(p.password);
-          await page.locator(SEL.next).first().click();
+          await active(page, SEL.passwd).fill(p.password);
+          await active(page, SEL.next).click();
           break;
         case 'otc':
           if (!onAuthority(page, authorityHost)) return { category: 'federated' };
-          await page.locator(SEL.otc).first().fill(totp(p.totpSeed));
-          await page.locator(SEL.otcSubmit).first().click();
+          await active(page, SEL.otc).fill(totp(p.totpSeed));
+          await active(page, SEL.otcSubmit).click();
           break;
         case 'pick_otp':
-          await page.locator(SEL.otpProof).first().click();
+          await active(page, SEL.otpProof, ACTIVE).click();
           break;
         case 'other_mfa':
           if (!(await visible(page, SEL.otherWay))) return { category: 'mfa_not_totp' };
-          await page.locator(SEL.otherWay).first().click();
+          await active(page, SEL.otherWay, ACTIVE).click();
           break;
         case 'kmsi':
-          await page.locator(SEL.back).first().click();
+          await active(page, SEL.back).click();
           break;
         case 'account_tile':
-          await page.locator(accountTile(p.username)).first().click();
+          await active(page, accountTile(p.username), ACTIVE).click();
           break;
       }
     }
     return outcome() ?? { category: 'page_changed', detail: `${await describe(page)} (timed out)` };
+  }
+
+  /**
+   * On the consent page, after the user's Yes: ticks "Consent on behalf of your organization" when the page has it
+   * (without it, Accept approves the app for this one account and Microsoft asks again for everyone else), then
+   * clicks the visible Accept. Returns why it could not, or undefined once Accept was clicked.
+   */
+  private async acceptConsent(page: Page, timeoutMs: number): Promise<string | undefined> {
+    const org = page.getByRole('checkbox', { name: ORG_CONSENT }).first();
+    if (await org.isVisible().catch(() => false)) {
+      if (!(await org.isChecked().catch(() => false))) {
+        // Microsoft styles this box; if the input itself will not take the click, its label will.
+        await org.check({ timeout: 2000 }).catch(() => page.getByText(ORG_CONSENT).first().click({ timeout: 2000 }).catch(() => {}));
+      }
+      if (!(await org.isChecked().catch(() => false))) return 'could not tick "Consent on behalf of your organization"';
+    }
+    // getByRole leaves out aria-hidden steps; #idSIButton9 (active step only) covers a page in another language.
+    const accept = page.getByRole('button', { name: /^\s*accept\s*$/i }).or(page.locator(activeSelector(SEL.next))).filter({ visible: true }).first();
+    try {
+      await accept.waitFor({ state: 'visible', timeout: Math.min(timeoutMs, 5000) });
+    } catch {
+      return 'no Accept button found';
+    }
+    await accept.click();
+    return undefined;
   }
 
   async close(): Promise<void> {
