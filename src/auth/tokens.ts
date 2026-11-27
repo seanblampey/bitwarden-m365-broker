@@ -3,7 +3,7 @@ import { BrokerError } from '../errors.js';
 import type { Redactor } from '../redact.js';
 import type { Credential } from '../vault/vault.js';
 import { permissionScopes, type Resource } from './resources.js';
-import { SignInError, type SignInBrowser, type SignInParams } from './signin.js';
+import { SignInError, browserGone, type SignInBrowser, type SignInParams } from './signin.js';
 
 const REFRESH_MARGIN_MS = 5 * 60_000;
 
@@ -63,6 +63,8 @@ export class TokenManager {
   /** "alias, app" pairs whose consent the user declined; not asked again until disconnect. */
   private declined = new Set<string>();
   private browserP: Promise<SignInBrowser> | undefined;
+  /** alias -> the Bitwarden username it signed in with, so disconnect can clear that browser session. */
+  private users = new Map<string, string>();
   private now: () => number;
 
   constructor(private deps: TokenManagerDeps) {
@@ -82,6 +84,7 @@ export class TokenManager {
     if (alias === undefined) {
       this.cache.clear();
       this.declined.clear();
+      this.users.clear();
       const bp = this.browserP;
       this.browserP = undefined;
       // A launch that failed has nothing to close.
@@ -91,6 +94,13 @@ export class TokenManager {
     }
     this.cache.delete(alias);
     for (const k of [...this.declined]) if ((JSON.parse(k) as string[])[0] === alias) this.declined.delete(k);
+    // Also the browser session, so a sign-in after disconnect really starts clean. Never launches a browser for this.
+    const user = this.users.get(alias);
+    this.users.delete(alias);
+    const browser = user !== undefined && this.browserP ? await this.browserP.catch(() => undefined) : undefined;
+    if (user !== undefined && ![...this.users.values()].some((u) => u.toLowerCase() === user.toLowerCase())) {
+      await browser?.forget?.(user).catch(() => {});
+    }
   }
 
   private async acquire(cred: Credential, resource: Resource) {
@@ -123,9 +133,29 @@ export class TokenManager {
     return this.store(cred, resource, await this.post(cred.tenant, resource, body));
   }
 
+  /**
+   * Anything but a BrokerError from the sign-in browser is unexpected (a Playwright or Node error). Its stack goes to
+   * the audit log as an `error` entry; the caller gets browser_failed instead of the broker's generic `internal`.
+   */
+  private unexpected(cred: Credential, e: unknown): BrokerError {
+    if (e instanceof BrokerError) return e;
+    const stack = e instanceof Error ? (e.stack ?? `${e.name}: ${e.message}`) : String(e);
+    this.deps.audit?.write({ type: 'error', tenant: cred.alias, detail: `sign-in browser: ${this.deps.redactor.scrub(stack)}` });
+    return browserGone();
+  }
+
   /** Browser sign-in. If Microsoft wants consent for the app and the user says Yes, grants it and signs in again. */
   private async signIn(cred: Credential, resource: Resource): Promise<{ code: string; verifier: string }> {
+    try {
+      return await this.signInOnce(cred, resource);
+    } catch (e) {
+      throw this.unexpected(cred, e);
+    }
+  }
+
+  private async signInOnce(cred: Credential, resource: Resource): Promise<{ code: string; verifier: string }> {
     const browser = await this.browser();
+    this.users.set(cred.alias, cred.username);
     const params: SignInParams = {
       authority: this.deps.authority,
       tenant: cred.tenant,
@@ -160,7 +190,7 @@ export class TokenManager {
       try {
         await browser.grantConsent(params);
       } catch (g) {
-        audit?.write({ type: 'consent_failed', tenant: cred.alias, detail: `${resource.appName}: ${g instanceof SignInError ? g.category : 'error'}` });
+        audit?.write({ type: 'consent_failed', tenant: cred.alias, detail: `${resource.appName}: ${g instanceof SignInError ? g.category : g instanceof BrokerError ? g.code : 'error'}` });
         throw g;
       }
       audit?.write({ type: 'consent_granted', tenant: cred.alias, detail: resource.appName });
@@ -169,8 +199,19 @@ export class TokenManager {
     }
   }
 
-  /** Launches the sign-in browser once; a failed launch is forgotten so the next call retries. */
-  private browser(): Promise<SignInBrowser> {
+  /**
+   * Launches the sign-in browser once; a failed launch is forgotten so the next call retries, and so is
+   * a browser that has since died (crashed, or closed by an Edge update or by the user).
+   */
+  private async browser(): Promise<SignInBrowser> {
+    const current = this.browserP;
+    if (current) {
+      const b = await current.catch(() => undefined);
+      if (b && b.isConnected?.() === false && this.browserP === current) {
+        this.browserP = undefined;
+        await b.close().catch(() => {});
+      }
+    }
     if (!this.browserP) {
       const p = this.deps.getBrowser().catch(() => {
         if (this.browserP === p) this.browserP = undefined;

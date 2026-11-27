@@ -39,6 +39,15 @@ export class SignInError extends BrokerError {
 const GRAPH_PREFIX = 'https://graph.microsoft.com/';
 
 /**
+ * The sign-in browser itself went away (Edge crashed or was closed, e.g. by an Edge update or by closing the
+ * window shown with showSignInWindow). Not a sign-in problem: the next try starts a fresh browser.
+ */
+export const browserGone = () => new BrokerError(
+  'browser_failed',
+  'The sign-in browser (Microsoft Edge) closed or stopped responding. Try again: the broker starts a fresh one.',
+);
+
+/**
  * Microsoft's admin-consent page for one app in one tenant. It asks for every scope sign-in asks for,
  * OpenID Connect ones included: a grant without `openid`/`profile` sends the next sign-in straight back
  * to a consent page (incremental consent), however often the admin approves.
@@ -240,7 +249,32 @@ export class SignInBrowser {
     private readonly browser: Browser,
     private readonly stepMs: number,
     private readonly overallMs: number,
-  ) {}
+  ) {
+    // Everything held for a browser that died is dead too.
+    browser.on('disconnected', () => {
+      this.contexts.clear();
+      this.signedIn.clear();
+    });
+  }
+
+  /** False once the browser process has gone; the owner should launch a new SignInBrowser. */
+  isConnected(): boolean {
+    return this.browser.isConnected();
+  }
+
+  /**
+   * Throws away one account's browser session (cookies), so its next sign-in starts from the login page.
+   * Waits for any sign-in already running.
+   */
+  forget(username: string): Promise<void> {
+    return this.enqueue(async () => {
+      const user = username.toLowerCase();
+      const context = this.contexts.get(user);
+      this.contexts.delete(user);
+      this.signedIn.delete(user);
+      await context?.close().catch(() => {});
+    });
+  }
 
   static async launch(opts: LaunchOpts = {}): Promise<SignInBrowser> {
     const browser = await chromium.launch({
@@ -250,11 +284,21 @@ export class SignInBrowser {
     return new SignInBrowser(browser, opts.stepTimeoutMs ?? 15_000, opts.overallTimeoutMs ?? 60_000);
   }
 
+  /** The account's context, or a new one if there is none or the old one was closed. */
   private async contextFor(user: string): Promise<BrowserContext> {
+    if (!this.browser.isConnected()) throw browserGone();
     let context = this.contexts.get(user);
     if (!context) {
-      context = await this.browser.newContext();
-      this.contexts.set(user, context);
+      // Playwright errors can quote internals: never pass them through.
+      const created = await this.browser.newContext().catch(() => { throw browserGone(); });
+      created.on('close', () => {
+        if (this.contexts.get(user) === created) {
+          this.contexts.delete(user);
+          this.signedIn.delete(user);
+        }
+      });
+      this.contexts.set(user, created);
+      context = created;
     }
     return context;
   }
@@ -321,8 +365,7 @@ export class SignInBrowser {
    */
   private async visit(p: SignInParams, url: string, state: string, acceptConsent: boolean, read: RedirectReader): Promise<Outcome> {
     const user = p.username.toLowerCase();
-    // Playwright errors can quote internals: never pass them through.
-    const context = await this.contextFor(user).catch(() => { throw new SignInError('page_changed'); });
+    const context = await this.contextFor(user);
     const authority = p.authority.replace(/\/+$/, '');
 
     let outcome: Outcome | undefined;
@@ -337,10 +380,27 @@ export class SignInBrowser {
       capture(route.request().url());
       await route.abort().catch(() => {});
     };
-    await context.route(matcher, handler);
     const onRequest = (r: Request) => capture(r.url());
-    context.on('request', onRequest);
-    const page = await context.newPage();
+    const cleanUp = async () => {
+      context.off('request', onRequest);
+      await context.unroute(matcher, handler).catch(() => {});
+    };
+    let page: Page;
+    try {
+      await context.route(matcher, handler);
+      context.on('request', onRequest);
+      page = await context.newPage();
+    } catch {
+      // The context or the whole browser is gone. Never let Playwright's error out: drop the context so the
+      // next try gets a fresh one (and the owner a fresh browser, if this one died).
+      await cleanUp();
+      if (this.contexts.get(user) === context) {
+        this.contexts.delete(user);
+        this.signedIn.delete(user);
+      }
+      await context.close().catch(() => {});
+      throw browserGone();
+    }
     try {
       const result = await this.drive(page, url, new URL(authority).host, p, () => outcome, acceptConsent);
       if ('category' in result) {
@@ -351,13 +411,13 @@ export class SignInBrowser {
     } catch (e) {
       // Playwright errors can quote selectors or page content: never pass them through.
       if (e instanceof BrokerError) throw e;
+      if (!this.browser.isConnected() || page.isClosed()) throw browserGone();
       const detail = `${await describe(page)} (an expected button or field did not respond)`;
       // Stuck on the consent page: the person can still approve by hand, so say how instead of page_changed.
       if (await consentShown(page).catch(() => false)) throw new SignInError('needs_consent', detail, consentHelp(authority, p.tenant, p.resource));
       throw new SignInError('page_changed', detail);
     } finally {
-      context.off('request', onRequest);
-      await context.unroute(matcher, handler).catch(() => {});
+      await cleanUp();
       await page.close().catch(() => {});
     }
   }

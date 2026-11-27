@@ -37978,6 +37978,10 @@ var SignInError = class extends BrokerError {
   }
 };
 var GRAPH_PREFIX = "https://graph.microsoft.com/";
+var browserGone = () => new BrokerError(
+  "browser_failed",
+  "The sign-in browser (Microsoft Edge) closed or stopped responding. Try again: the broker starts a fresh one."
+);
 function adminConsentUrl(authority, tenant, resource, state) {
   const q = new URLSearchParams({
     client_id: resource.clientId,
@@ -38107,6 +38111,10 @@ var SignInBrowser = class _SignInBrowser {
     this.browser = browser;
     this.stepMs = stepMs;
     this.overallMs = overallMs;
+    browser.on("disconnected", () => {
+      this.contexts.clear();
+      this.signedIn.clear();
+    });
   }
   browser;
   stepMs;
@@ -38120,6 +38128,24 @@ var SignInBrowser = class _SignInBrowser {
   signedIn = /* @__PURE__ */ new Set();
   /** Serialises authorize() so sign-ins never overlap. */
   queue = Promise.resolve();
+  /** False once the browser process has gone; the owner should launch a new SignInBrowser. */
+  isConnected() {
+    return this.browser.isConnected();
+  }
+  /**
+   * Throws away one account's browser session (cookies), so its next sign-in starts from the login page.
+   * Waits for any sign-in already running.
+   */
+  forget(username) {
+    return this.enqueue(async () => {
+      const user = username.toLowerCase();
+      const context = this.contexts.get(user);
+      this.contexts.delete(user);
+      this.signedIn.delete(user);
+      await context?.close().catch(() => {
+      });
+    });
+  }
   static async launch(opts = {}) {
     const browser = await chromium.launch({
       headless: opts.headless ?? true,
@@ -38127,11 +38153,22 @@ var SignInBrowser = class _SignInBrowser {
     });
     return new _SignInBrowser(browser, opts.stepTimeoutMs ?? 15e3, opts.overallTimeoutMs ?? 6e4);
   }
+  /** The account's context, or a new one if there is none or the old one was closed. */
   async contextFor(user) {
+    if (!this.browser.isConnected()) throw browserGone();
     let context = this.contexts.get(user);
     if (!context) {
-      context = await this.browser.newContext();
-      this.contexts.set(user, context);
+      const created = await this.browser.newContext().catch(() => {
+        throw browserGone();
+      });
+      created.on("close", () => {
+        if (this.contexts.get(user) === created) {
+          this.contexts.delete(user);
+          this.signedIn.delete(user);
+        }
+      });
+      this.contexts.set(user, created);
+      context = created;
     }
     return context;
   }
@@ -38192,9 +38229,7 @@ var SignInBrowser = class _SignInBrowser {
    */
   async visit(p, url2, state, acceptConsent, read) {
     const user = p.username.toLowerCase();
-    const context = await this.contextFor(user).catch(() => {
-      throw new SignInError("page_changed");
-    });
+    const context = await this.contextFor(user);
     const authority = p.authority.replace(/\/+$/, "");
     let outcome;
     const isRedirect = (u) => u.startsWith(p.resource.redirectUri);
@@ -38209,10 +38244,27 @@ var SignInBrowser = class _SignInBrowser {
       await route.abort().catch(() => {
       });
     };
-    await context.route(matcher, handler);
     const onRequest = (r) => capture(r.url());
-    context.on("request", onRequest);
-    const page = await context.newPage();
+    const cleanUp = async () => {
+      context.off("request", onRequest);
+      await context.unroute(matcher, handler).catch(() => {
+      });
+    };
+    let page;
+    try {
+      await context.route(matcher, handler);
+      context.on("request", onRequest);
+      page = await context.newPage();
+    } catch {
+      await cleanUp();
+      if (this.contexts.get(user) === context) {
+        this.contexts.delete(user);
+        this.signedIn.delete(user);
+      }
+      await context.close().catch(() => {
+      });
+      throw browserGone();
+    }
     try {
       const result2 = await this.drive(page, url2, new URL(authority).host, p, () => outcome, acceptConsent);
       if ("category" in result2) {
@@ -38222,13 +38274,12 @@ var SignInBrowser = class _SignInBrowser {
       return result2;
     } catch (e) {
       if (e instanceof BrokerError) throw e;
+      if (!this.browser.isConnected() || page.isClosed()) throw browserGone();
       const detail = `${await describe3(page)} (an expected button or field did not respond)`;
       if (await consentShown(page).catch(() => false)) throw new SignInError("needs_consent", detail, consentHelp(authority, p.tenant, p.resource));
       throw new SignInError("page_changed", detail);
     } finally {
-      context.off("request", onRequest);
-      await context.unroute(matcher, handler).catch(() => {
-      });
+      await cleanUp();
       await page.close().catch(() => {
       });
     }
@@ -38654,6 +38705,8 @@ var TokenManager = class {
   /** "alias, app" pairs whose consent the user declined; not asked again until disconnect. */
   declined = /* @__PURE__ */ new Set();
   browserP;
+  /** alias -> the Bitwarden username it signed in with, so disconnect can clear that browser session. */
+  users = /* @__PURE__ */ new Map();
   now;
   getAccessToken(cred, resource) {
     const key = JSON.stringify([cred.alias, resource.key]);
@@ -38667,14 +38720,22 @@ var TokenManager = class {
     if (alias === void 0) {
       this.cache.clear();
       this.declined.clear();
+      this.users.clear();
       const bp = this.browserP;
       this.browserP = void 0;
-      const browser = bp ? await bp.catch(() => void 0) : void 0;
-      await browser?.close();
+      const browser2 = bp ? await bp.catch(() => void 0) : void 0;
+      await browser2?.close();
       return;
     }
     this.cache.delete(alias);
     for (const k of [...this.declined]) if (JSON.parse(k)[0] === alias) this.declined.delete(k);
+    const user = this.users.get(alias);
+    this.users.delete(alias);
+    const browser = user !== void 0 && this.browserP ? await this.browserP.catch(() => void 0) : void 0;
+    if (user !== void 0 && ![...this.users.values()].some((u) => u.toLowerCase() === user.toLowerCase())) {
+      await browser?.forget?.(user).catch(() => {
+      });
+    }
   }
   async acquire(cred, resource) {
     const entries = this.cache.get(cred.alias);
@@ -38702,9 +38763,27 @@ var TokenManager = class {
     });
     return this.store(cred, resource, await this.post(cred.tenant, resource, body));
   }
+  /**
+   * Anything but a BrokerError from the sign-in browser is unexpected (a Playwright or Node error). Its stack goes to
+   * the audit log as an `error` entry; the caller gets browser_failed instead of the broker's generic `internal`.
+   */
+  unexpected(cred, e) {
+    if (e instanceof BrokerError) return e;
+    const stack = e instanceof Error ? e.stack ?? `${e.name}: ${e.message}` : String(e);
+    this.deps.audit?.write({ type: "error", tenant: cred.alias, detail: `sign-in browser: ${this.deps.redactor.scrub(stack)}` });
+    return browserGone();
+  }
   /** Browser sign-in. If Microsoft wants consent for the app and the user says Yes, grants it and signs in again. */
   async signIn(cred, resource) {
+    try {
+      return await this.signInOnce(cred, resource);
+    } catch (e) {
+      throw this.unexpected(cred, e);
+    }
+  }
+  async signInOnce(cred, resource) {
     const browser = await this.browser();
+    this.users.set(cred.alias, cred.username);
     const params = {
       authority: this.deps.authority,
       tenant: cred.tenant,
@@ -38738,7 +38817,7 @@ var TokenManager = class {
       try {
         await browser.grantConsent(params);
       } catch (g) {
-        audit?.write({ type: "consent_failed", tenant: cred.alias, detail: `${resource.appName}: ${g instanceof SignInError ? g.category : "error"}` });
+        audit?.write({ type: "consent_failed", tenant: cred.alias, detail: `${resource.appName}: ${g instanceof SignInError ? g.category : g instanceof BrokerError ? g.code : "error"}` });
         throw g;
       }
       audit?.write({ type: "consent_granted", tenant: cred.alias, detail: resource.appName });
@@ -38746,8 +38825,20 @@ var TokenManager = class {
       return browser.authorize(params);
     }
   }
-  /** Launches the sign-in browser once; a failed launch is forgotten so the next call retries. */
-  browser() {
+  /**
+   * Launches the sign-in browser once; a failed launch is forgotten so the next call retries, and so is
+   * a browser that has since died (crashed, or closed by an Edge update or by the user).
+   */
+  async browser() {
+    const current = this.browserP;
+    if (current) {
+      const b = await current.catch(() => void 0);
+      if (b && b.isConnected?.() === false && this.browserP === current) {
+        this.browserP = void 0;
+        await b.close().catch(() => {
+        });
+      }
+    }
     if (!this.browserP) {
       const p = this.deps.getBrowser().catch(() => {
         if (this.browserP === p) this.browserP = void 0;
